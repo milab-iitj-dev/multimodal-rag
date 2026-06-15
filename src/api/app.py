@@ -1,8 +1,9 @@
 """
-Unified MMRAG API — FastAPI endpoint for both domains.
+Unified MMRAG API — FastAPI endpoint for all domains.
 
-Provides a single REST API that routes queries to either the
-healthcare or scientific pipeline based on the 'domain' parameter.
+Uses the domain-agnostic DomainRouter. The API has ZERO knowledge
+of healthcare or scientific internals. It calls router.route()
+and serializes the UnifiedResponse.
 
 Usage:
     uvicorn src.api.app:app --host 0.0.0.0 --port 8000
@@ -13,9 +14,13 @@ Endpoints:
     GET  /domains   — List available domains
 """
 
+from __future__ import annotations
+
+from dataclasses import asdict
+from typing import Optional, List, Dict, Any
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional
 
 app = FastAPI(
     title="MMRAG Unified API",
@@ -23,31 +28,70 @@ app = FastAPI(
         "Multimodal Retrieval-Augmented Generation for "
         "Healthcare (chest X-ray VQA) and Scientific (paper QA) domains."
     ),
-    version="1.0.0",
+    version="2.0.0",
 )
+
+
+# ── Pydantic models (API contract) ──────────────────────────────
+
+class SourceItemModel(BaseModel):
+    """A single source/citation in the API response."""
+    title: str = ""
+    score: float = 0.0
+    snippet: str = ""
+    url: str = ""
+    page_numbers: List[int] = []
+    metadata: Dict[str, Any] = {}
 
 
 class QueryRequest(BaseModel):
     """Request body for the /query endpoint."""
     query: str
-    domain: Optional[str] = None  # "healthcare" or "scientific"
+    domain: Optional[str] = None   # "healthcare", "scientific", or None (auto)
     image_path: Optional[str] = None
     top_k: int = 3
 
 
 class QueryResponse(BaseModel):
-    """Response body from the /query endpoint."""
+    """
+    Unified response from ANY domain pipeline.
+
+    This matches UnifiedResponse exactly.
+    """
     domain: str
     answer: str
-    confidence: Optional[str] = None
-    num_retrieved: int = 0
-    metadata: dict = {}
+    confidence: float = 0.0
+    sources: List[SourceItemModel] = []
+    metadata: Dict[str, Any] = {}
 
+
+# ── Global router (initialized at startup) ──────────────────────
+
+_router = None
+
+
+def _get_router():
+    """Lazy-init the domain router with placeholder pipelines."""
+    global _router
+    if _router is not None:
+        return _router
+
+    from src.router.domain_router import DomainRouter
+    from pipelines.healthcare.adapter import HealthcarePipeline
+    from pipelines.scientific.adapter import ScientificPipeline
+
+    _router = DomainRouter()
+    _router.register("healthcare", HealthcarePipeline(inner_pipeline=None))
+    _router.register("scientific", ScientificPipeline(inner_pipeline=None))
+    return _router
+
+
+# ── Endpoints ───────────────────────────────────────────────────
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "mmrag-unified"}
+    return {"status": "healthy", "service": "mmrag-unified", "version": "2.0.0"}
 
 
 @app.get("/domains")
@@ -74,67 +118,55 @@ async def run_query(request: QueryRequest):
     """
     Run a query through the appropriate domain pipeline.
 
-    The domain is determined by:
+    Domain detection:
       1. Explicit 'domain' parameter (if provided)
       2. Auto-detection from query keywords
       3. Config default (healthcare)
+
+    Returns:
+      QueryResponse (identical schema for ALL domains).
     """
-    from src.router.domain_router import DomainRouter
+    router = _get_router()
 
-    router = DomainRouter()
-    domain = router.detect_domain(
-        query=request.query,
-        domain_hint=request.domain,
-    )
+    # Load image if path provided
+    image = None
+    if request.image_path:
+        try:
+            from src.shared.image_utils import load_image
+            image = load_image(request.image_path)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to load image: {e}",
+            )
 
-    if domain == "healthcare":
-        return await _run_healthcare(request, domain)
-    elif domain == "scientific":
-        return await _run_scientific(request, domain)
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown domain: {domain}",
+    try:
+        result = router.route(
+            query=request.query,
+            domain_hint=request.domain,
+            image=image,
+            top_k=request.top_k,
         )
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Pipeline error: {e}")
 
-
-async def _run_healthcare(request: QueryRequest, domain: str) -> QueryResponse:
-    """
-    Placeholder for healthcare pipeline integration.
-
-    In production, this would:
-      1. Load the RAGVQAPipeline
-      2. Run request.query through it
-      3. Return the grounded answer
-    """
+    # Convert UnifiedResponse → QueryResponse (Pydantic)
     return QueryResponse(
-        domain=domain,
-        answer=(
-            f"[Healthcare] Pipeline ready for query: '{request.query}'. "
-            f"Initialize RAGVQAPipeline with configs/healthcare/ to enable."
-        ),
-        confidence="N/A",
-        num_retrieved=0,
-        metadata={"pipeline": "healthcare", "status": "placeholder"},
-    )
-
-
-async def _run_scientific(request: QueryRequest, domain: str) -> QueryResponse:
-    """
-    Placeholder for scientific pipeline integration.
-
-    In production, this would:
-      1. Load the OnlinePipeline
-      2. Run request.query through it
-      3. Return the self-checked answer
-    """
-    return QueryResponse(
-        domain=domain,
-        answer=(
-            f"[Scientific] Pipeline ready for query: '{request.query}'. "
-            f"Initialize OnlinePipeline with configs/scientific/ to enable."
-        ),
-        confidence="N/A",
-        num_retrieved=0,
-        metadata={"pipeline": "scientific", "status": "placeholder"},
+        domain=result.domain,
+        answer=result.answer,
+        confidence=result.confidence,
+        sources=[
+            SourceItemModel(
+                title=s.title,
+                score=s.score,
+                snippet=s.snippet,
+                url=s.url,
+                page_numbers=s.page_numbers,
+                metadata=s.metadata,
+            )
+            for s in result.sources
+        ],
+        metadata=result.metadata,
     )

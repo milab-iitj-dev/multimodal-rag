@@ -1,18 +1,24 @@
 """
-Domain Router — dispatches queries to the correct pipeline.
+Domain Router — domain-agnostic query dispatcher.
 
-Detects whether a query should be handled by the healthcare or
-scientific pipeline based on explicit domain selection or
-config-driven defaults.
+Detects the domain, selects the pipeline, and executes run().
+The router NEVER needs to know whether the pipeline is healthcare
+or scientific. It only knows: detect → select → execute.
 
 Usage:
     router = DomainRouter(config)
-    domain = router.detect_domain(query, domain_hint="healthcare")
-    pipeline = router.get_pipeline(domain)
-    result = pipeline.run(query)
+    router.register("healthcare", healthcare_pipeline)
+    router.register("scientific", scientific_pipeline)
+    result = router.route(query="Is there effusion?", image=img)
 """
 
-from typing import Optional
+from __future__ import annotations
+
+from typing import Optional, Dict, Any
+from PIL import Image
+
+from src.shared.base_pipeline import BasePipeline
+from src.shared.schemas.response import UnifiedResponse
 from src.shared.logging_utils import setup_logger
 
 logger = setup_logger("router.domain")
@@ -20,25 +26,19 @@ logger = setup_logger("router.domain")
 
 class DomainRouter:
     """
-    Routes queries to the correct domain pipeline.
+    Domain-agnostic query router.
 
-    Supports:
-      - Explicit domain selection via parameter
-      - Config-driven default domain
-      - (Future) Auto-detection via keyword analysis
+    Responsibilities (ONLY these):
+      1. Detect which domain a query belongs to
+      2. Select the registered pipeline for that domain
+      3. Execute pipeline.run()
 
-    Usage:
-        router = DomainRouter(config)
-        domain = router.detect_domain("Is there pleural effusion?")
-        # → "healthcare"
-
-        domain = router.detect_domain("What is the Vision Transformer?")
-        # → "scientific"
+    The router has ZERO knowledge of healthcare or scientific internals.
     """
 
     VALID_DOMAINS = {"healthcare", "scientific"}
 
-    # Keywords that strongly indicate healthcare domain
+    # ── Keyword sets for auto-detection ──
     _HEALTHCARE_KEYWORDS = {
         "x-ray", "xray", "chest", "lung", "pleural", "effusion",
         "cardiomegaly", "pneumonia", "pneumothorax", "atelectasis",
@@ -47,7 +47,6 @@ class DomainRouter:
         "dicom", "findings", "impression", "diagnosis",
     }
 
-    # Keywords that strongly indicate scientific domain
     _SCIENTIFIC_KEYWORDS = {
         "paper", "arxiv", "transformer", "attention", "bert",
         "neural", "network", "architecture", "benchmark", "dataset",
@@ -60,16 +59,47 @@ class DomainRouter:
     def __init__(self, config: Optional[dict] = None):
         """
         Args:
-            config: Unified config dict. Expected structure:
-                config["unified"]["default_domain"] = "healthcare"
+            config: Unified config dict.
+                    config["unified"]["default_domain"] = "healthcare"
         """
         self.config = config or {}
         unified = self.config.get("unified", {})
         self.default_domain = unified.get("default_domain", "healthcare")
 
-        logger.info(
-            f"DomainRouter initialized (default: {self.default_domain})"
-        )
+        # Pipeline registry: domain_name → BasePipeline instance
+        self._pipelines: Dict[str, BasePipeline] = {}
+
+        logger.info(f"DomainRouter initialized (default: {self.default_domain})")
+
+    # ── Registration ──
+
+    def register(self, domain: str, pipeline: BasePipeline) -> None:
+        """
+        Register a pipeline for a domain.
+
+        Args:
+            domain:   Domain name (e.g. "healthcare", "scientific").
+            pipeline: A BasePipeline instance.
+        """
+        self._pipelines[domain] = pipeline
+        logger.info(f"Registered pipeline: {domain} -> {type(pipeline).__name__}")
+
+    # ── Pipeline selection ──
+
+    def get_pipeline(self, domain: str) -> BasePipeline:
+        """
+        Get the registered pipeline for a domain.
+
+        Raises KeyError if no pipeline is registered for the domain.
+        """
+        if domain not in self._pipelines:
+            raise KeyError(
+                f"No pipeline registered for domain '{domain}'. "
+                f"Available: {list(self._pipelines.keys())}"
+            )
+        return self._pipelines[domain]
+
+    # ── Domain detection ──
 
     def detect_domain(
         self,
@@ -83,13 +113,6 @@ class DomainRouter:
           1. Explicit domain_hint (if valid)
           2. Keyword-based auto-detection
           3. Config default
-
-        Args:
-            query:       The user's query text.
-            domain_hint: Explicit domain override.
-
-        Returns:
-            "healthcare" or "scientific"
         """
         # Priority 1: Explicit hint
         if domain_hint and domain_hint.lower() in self.VALID_DOMAINS:
@@ -107,24 +130,43 @@ class DomainRouter:
         logger.info(f"Domain: {self.default_domain} (default)")
         return self.default_domain
 
+    # ── The main entry point ──
+
+    def route(
+        self,
+        query: str,
+        domain_hint: Optional[str] = None,
+        image: Optional[Image.Image] = None,
+        top_k: int = 3,
+        **kwargs: Any,
+    ) -> UnifiedResponse:
+        """
+        Detect domain → select pipeline → execute run().
+
+        This is the ONLY method the API/UI layer needs to call.
+
+        Args:
+            query:       The user's query text.
+            domain_hint: Explicit domain override.
+            image:       Optional PIL image.
+            top_k:       Number of documents to retrieve.
+
+        Returns:
+            UnifiedResponse from the appropriate pipeline.
+        """
+        domain = self.detect_domain(query, domain_hint)
+        pipeline = self.get_pipeline(domain)
+        result = pipeline.run(query=query, image=image, top_k=top_k, **kwargs)
+        return result
+
+    # ── Internal ──
+
     def _detect_by_keywords(self, query: str) -> Optional[str]:
-        """
-        Detect domain from query keywords.
-
-        Counts keyword matches for each domain and returns the
-        domain with more matches, or None if tied/zero.
-        """
+        """Detect domain from query keywords."""
         q_lower = query.lower()
-        words = set(q_lower.split())
 
-        health_score = sum(
-            1 for kw in self._HEALTHCARE_KEYWORDS
-            if kw in q_lower
-        )
-        sci_score = sum(
-            1 for kw in self._SCIENTIFIC_KEYWORDS
-            if kw in q_lower
-        )
+        health_score = sum(1 for kw in self._HEALTHCARE_KEYWORDS if kw in q_lower)
+        sci_score = sum(1 for kw in self._SCIENTIFIC_KEYWORDS if kw in q_lower)
 
         if health_score > sci_score and health_score >= 2:
             return "healthcare"

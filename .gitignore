@@ -1,0 +1,50 @@
+# Data
+data/
+!data/.gitkeep
+!data/openi/.gitkeep
+
+# Checkpoints and models
+checkpoints/
+!checkpoints/.gitkeep
+!checkpoints/llava-medical-vqa/.gitkeep
+*.bin
+*.safetensors
+*.pt
+*.pth
+
+# Outputs (ignore runtime outputs, but keep kaggle validation evidence)
+outputs/*
+!outputs/.gitkeep
+!outputs/kaggle_validation/
+!outputs/kaggle_validation/**
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+wandb/

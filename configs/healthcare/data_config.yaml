@@ -1,0 +1,48 @@
+# ============================================================
+# Data Configuration — Healthcare MRAG Phase 1
+# ============================================================
+# Controls dataset selection, paths, and preprocessing params.
+#
+# OpenI CSV format:
+#   reports_dir must contain:
+#     - indiana_reports.csv      (uid, MeSH, Problems, image,
+#                                 indication, comparison, findings, impression)
+#     - indiana_projections.csv  (uid, filename, projection)
+#   images_dir must contain:
+#     - *.dcm.png image files (e.g., 1_IM-0001-4001.dcm.png)
+# ============================================================
+
+dataset:
+  name: "openi"
+  # --- Kaggle paths (uncomment when running on Kaggle) ---
+  # images_dir: "/kaggle/input/openi-chest-xray/images"
+  # reports_dir: "/kaggle/input/openi-chest-xray/reports"
+
+  # --- Local paths (set to your actual local directories) ---
+  images_dir: "data/openi/images"
+  reports_dir: "data/openi/reports"
+
+  # Maximum number of samples to load (null = load all)
+  max_samples: null
+
+  # Prefer frontal (PA) projection images over lateral
+  prefer_frontal: true
+
+  # Train/val/test split ratios
+  split:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+  seed: 42
+
+preprocessing:
+  image:
+    resize: [336, 336]                    # LLaVA-1.5 native resolution
+    normalize: true
+    mean: [0.48145466, 0.4578275, 0.40821073]   # CLIP normalization
+    std: [0.26862954, 0.26130258, 0.27577711]
+
+  text:
+    max_report_length: 512                # max tokens for report text
+    max_question_length: 128
+    max_answer_length: 256

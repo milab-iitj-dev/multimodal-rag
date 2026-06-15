@@ -1,0 +1,76 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Scientific Multimodal RAG — Unified Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Usage:
+#   python main.py --mode offline    # Step 1–4: Download → Parse → Embed → Index
+#   python main.py --mode online     # Step 5:   Launch Streamlit Q&A app
+#   python main.py --mode full       # Steps 1–5 end-to-end
+#
+# On HPC, RAG_BASE_DIR overrides all paths below:
+#   export RAG_BASE_DIR=/scratch/data/divyasaxena_rs/Vineet_internship
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Runtime paths (overridden by RAG_BASE_DIR env var on HPC) ─────────────────
+paths:
+  raw:          data/raw
+  pages:        data/parsed/pages
+  markdown:     data/parsed/markdown
+  multivectors: data/indices/multivectors
+  chroma_index: data/indices/chroma_index
+  indices:      data/indices
+  outputs:      outputs
+  logs:         logs
+
+# ── Paper list ────────────────────────────────────────────────────────────────
+papers:
+  "2010.11929": "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale"
+  "2106.10270": "Training data-efficient image transformers & distillation through attention"
+  "2205.01580": "A Battle of Architectures: ViT, ResNet and Hybrid in 3D Medical Image Segmentation"
+  "2108.00102": "DeepViT: Towards Deeper Vision Transformer"
+  "2203.14465": "EfficientFormer: Vision Transformers at MobileNet Speed"
+  "2211.11505": "Scaling Vision Transformers to 22 Billion Parameters"
+  "2303.15326": "A Survey on Vision Transformer"
+  "2106.14881": "Swin Transformer V2: Scaling Up Capacity and Resolution"
+  "2111.09883": "Aggregating Nested Transformers"
+  "2204.00636": "Egocentric Video Understanding Using Vision Transformers"
+
+# ── Models ────────────────────────────────────────────────────────────────────
+models:
+  colpali:
+    model_name: vidore/colpali-v1.2
+    device: cuda          # auto-detected at runtime if no GPU
+    torch_dtype: float16
+
+  scincl:
+    model_name: malteos/scincl
+    device: cuda
+    max_length: 512
+    batch_size: 32
+
+  qwen2vl:
+    model_name: Qwen/Qwen2-VL-2B-Instruct
+    device: cuda
+    torch_dtype: float16
+    max_new_tokens: 450
+    confidence_threshold: 0.5
+    max_retries: 1
+
+# ── Retrieval ─────────────────────────────────────────────────────────────────
+retrieval:
+  top_k: 3
+  colpali_weight: 0.7
+  scincl_weight: 0.3
+  chroma_collection: sci_rag_pages   # must match what offline pipeline creates
+
+# ── Parsing ───────────────────────────────────────────────────────────────────
+parsing:
+  dpi: 200
+
+# ── App ───────────────────────────────────────────────────────────────────────
+app:
+  streamlit_port: 8501
+  gradio_port: 7860
+  server_name: "0.0.0.0"
+  title: "Scientific RAG — Vision Transformer Papers"
+  description: "Ask questions about 10 Vision Transformer research papers. Powered by ColPali + SciNCL + Qwen2-VL."

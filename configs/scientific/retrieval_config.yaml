@@ -1,0 +1,20 @@
+# ──────────────────────────────────────────────────────
+# RETRIEVAL CONFIGURATION
+# ──────────────────────────────────────────────────────
+# Controls retrieval parameters and score fusion weights.
+# Vision (ColPali) gets 70% weight because it captures
+# layout, figures, and tables that text retrieval misses.
+
+retrieval:
+  top_k: 5                         # Number of results to return
+  colpali_weight: 0.7              # Vision retrieval weight
+  scincl_weight: 0.3              # Text retrieval weight
+  # Constraint: colpali_weight + scincl_weight = 1.0
+
+  chroma_collection: "sci_text"    # ChromaDB collection name
+  chroma_persist_dir: "data/indices/chroma_index/"
+  npy_dir: "data/indices/multivectors/"
+
+  # MaxSim parameters
+  similarity_metric: "dot"         # Dot product for ColPali
+  normalize_scores: true           # Min-max normalize before fusion

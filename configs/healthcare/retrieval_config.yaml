@@ -1,0 +1,75 @@
+# ============================================================
+# Retrieval Configuration — Healthcare MRAG Phase 3
+# ============================================================
+# Controls retrieval methods, index paths, fusion, and reranking.
+#
+# Phase 3: ColQwen2 dual-index (image + text) with RRF fusion
+#           and question-aware reranking.
+# ============================================================
+
+retrieval:
+  # Which retriever to use at the pipeline level
+  # "colqwen2"  = image-only ColQwen2 (Phase 2, backward compatible)
+  # "hybrid"    = dual-index ColQwen2 with RRF fusion (Phase 3)
+  method: "hybrid"
+
+  # Number of final documents to return to context builder
+  top_k: 3
+
+  # --- BM25 Settings (Phase 3.5 — fallback if ColQwen2 text is weak) ---
+  bm25:
+    enabled: false
+    k1: 1.5                              # term frequency saturation
+    b: 0.75                              # document length normalization
+    tokenizer: "simple"                  # "simple" | "scispacy" | "nltk"
+    index_path: "data/indexes/bm25_index.pkl"
+
+  # --- CLIP Settings (not yet implemented) ---
+  clip:
+    enabled: false
+    model_name: "openai/clip-vit-base-patch32"
+    batch_size: 32
+    index_path: "data/indexes/clip_faiss.index"
+    embeddings_path: "data/indexes/clip_embeddings.npy"
+
+  # --- ColQwen2 Settings ---
+  colqwen2:
+    enabled: true
+    model_name: "vidore/colqwen2-v1.0"
+    batch_size: 4                        # conservative for VRAM
+    index_path: "data/indexes/colqwen2_index/"
+
+    # Image path remapping: remap Kaggle paths in document_store.json
+    # to HPC image directory. Set to "" to disable remapping.
+    image_base_dir: "data/openi/images/"
+
+    # Phase 3: Dual-index settings
+    dual_index:
+      enabled: true
+      text_max_length: 256               # max tokens for document text encoding
+      text_batch_size: 8                 # text encoding is lighter, can batch more
+
+    # Phase 3: Fusion settings for image+text queries
+    fusion:
+      method: "rrf"                      # "rrf" (rank-based, score-agnostic)
+      rrf_k: 60                          # RRF constant (standard = 60)
+      over_retrieve_k: 15               # retrieve 15 from each, fuse to top_k
+      weights:
+        image: 1.0                       # image retrieval weight in RRF
+        text: 1.0                        # text retrieval weight in RRF
+
+    # Phase 3: Question-aware reranking
+    reranking:
+      enabled: true
+      boost_weight: 0.15                 # how much keyword overlap boosts score
+      medical_stopwords: true            # filter common medical words from overlap
+
+# --- Context Building ---
+context:
+  max_context_tokens: 1024               # token budget for retrieved evidence
+  include_scores: true                   # show relevance scores in context
+
+# --- Index Paths ---
+index:
+  base_dir: "data/indexes"
+  document_store_path: "data/indexes/colqwen2_index/document_store.json"

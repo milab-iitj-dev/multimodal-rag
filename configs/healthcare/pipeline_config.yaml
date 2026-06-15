@@ -1,0 +1,52 @@
+# ============================================================
+# Pipeline Configuration — Healthcare MRAG
+# ============================================================
+# Controls which pipeline mode to run and how components connect.
+# ============================================================
+
+pipeline:
+  # Pipeline mode: "simple_vqa" (Phase 1), "rag_vqa" (Phase 2), "full_rag" (Phase 5)
+  mode: "rag_vqa"
+
+  # --- Simple VQA (Phase 1) ---
+  simple_vqa:
+    model_config: "configs/model_config.yaml"
+    data_config: "configs/data_config.yaml"
+    max_samples: 10                      # for quick testing
+
+  # --- RAG VQA (Phase 2) ---
+  rag_vqa:
+    model_config: "configs/model_config.yaml"
+    data_config: "configs/data_config.yaml"
+    retrieval_config: "configs/retrieval_config.yaml"
+    index_dir: "data/indexes/colqwen2_index"
+    top_k: 3                             # retrieve top 3 cases
+    max_context_chars: 3000              # total context token budget
+    max_evidence_chars: 800              # per-evidence piece budget
+    use_reranking: false                 # Phase 3+
+    use_grounding: false                 # Phase 5
+
+  # --- Offline Indexing (Phase 2) ---
+  offline_indexing:
+    data_config: "configs/data_config.yaml"
+    retrieval_config: "configs/retrieval_config.yaml"
+    index_dir: "data/indexes/colqwen2_index"
+    max_samples: null                    # null = index all samples
+
+  # --- Full RAG (Phase 5) ---
+  full_rag:
+    model_config: "configs/model_config.yaml"
+    data_config: "configs/data_config.yaml"
+    retrieval_config: "configs/retrieval_config.yaml"
+    use_reranking: true
+    use_grounding: true
+    use_safety_check: true
+    max_context_tokens: 2048
+
+# --- Output Settings ---
+output:
+  results_dir: "outputs/results"
+  logs_dir: "outputs/logs"
+  save_predictions: true
+  save_metrics: true
+  verbose: true

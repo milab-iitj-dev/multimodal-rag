@@ -1,0 +1,30 @@
+# ============================================================
+# Evaluation Configuration — Healthcare MRAG
+# ============================================================
+# Controls metrics, evaluation splits, and output formats.
+# ============================================================
+
+evaluation:
+  # Which metrics to compute
+  metrics:
+    - "bleu"                             # BLEU-1,2,3,4
+    - "rouge"                            # ROUGE-L
+    - "meteor"                           # METEOR
+    - "bertscore"                        # BERTScore (semantic similarity)
+    - "exact_match"                      # Exact match accuracy
+    - "f1"                               # Token-level F1
+
+  # Retrieval-specific metrics (Phase 3+)
+  retrieval_metrics:
+    - "recall@k"                         # Recall at k
+    - "mrr"                              # Mean Reciprocal Rank
+    - "ndcg"                             # Normalized DCG
+
+  # Evaluation split
+  split: "test"                          # "val" | "test"
+  max_samples: null                      # null = evaluate all
+
+  # Output
+  output_dir: "outputs/evaluation"
+  save_per_sample: true                  # save per-sample predictions
+  save_summary: true                     # save aggregate metrics

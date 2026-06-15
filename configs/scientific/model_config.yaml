@@ -1,0 +1,42 @@
+# ──────────────────────────────────────────────────────
+# MODEL CONFIGURATION
+# ──────────────────────────────────────────────────────
+# Defines all model paths and parameters.
+# Optimized for Kaggle P100 (16GB VRAM) with staggered loading.
+# Models are loaded one at a time: load → use → unload.
+
+models:
+
+  # ── ColPali Vision Embedder ──
+  # Multi-vector embeddings for page-level retrieval
+  # Uses Gemma-2B backbone, outputs [N, 128] per page
+  # VRAM: ~2.5 GB | Load first, use, then UNLOAD
+  colpali:
+    model_name: "vidore/colpali-v1.2"
+    device: "cuda"                  # GPU for embedding
+    torch_dtype: "float16"         # Half precision saves VRAM
+    max_pages_per_batch: 4         # Prevents OOM on large docs
+    output_dim: 128                # Each vector's dimension
+
+  # ── SciNCL Text Embedder ──
+  # Scientific text embeddings (768-dim dense vectors)
+  # CPU fallback supported (slower but works)
+  # VRAM: ~0.6 GB | Load second, use, then UNLOAD
+  scincl:
+    model_name: "malteos/scincl"
+    device: "cuda"                  # GPU, fallback to CPU
+    max_length: 512                # Max tokens per text chunk
+    output_dim: 768                # Dense vector dimension
+
+  # ── Qwen2-VL Generator ──
+  # Answer generation with Vision-Language Model
+  # 4-bit quantized = only 1.5GB VRAM needed
+  # Load LAST (after retrieval), generate, then UNLOAD
+  qwen2vl:
+    model_name: "Qwen/Qwen2-VL-2B-Instruct"
+    quantization: "4bit"           # BitsAndBytes NF4
+    device: "cuda"
+    max_new_tokens: 512            # Answer length limit
+    temperature: 0.3               # Low = more factual
+    confidence_threshold: 0.6      # Below this = retry
+    max_retries: 2                 # Max 3 attempts total

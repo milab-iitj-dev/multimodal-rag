@@ -1,0 +1,16 @@
+# ──────────────────────────────────────────────────────
+# EVALUATION CONFIGURATION
+# ──────────────────────────────────────────────────────
+# Controls evaluation metrics and comparison settings.
+
+evaluation:
+  eval_set_path: "outputs/evaluation/eval_set.json"
+  metrics:
+    - bleu4
+    - rouge_l
+    - anls
+    - f1
+  confidence_threshold: 0.6
+  baseline_enabled: true           # Compare with text-only RAG
+  output_dir: "outputs/evaluation/"
+  charts_dir: "outputs/evaluation/evaluation_charts/"

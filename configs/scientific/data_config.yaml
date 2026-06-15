@@ -1,0 +1,26 @@
+# ──────────────────────────────────────────────────────
+# DATA CONFIGURATION
+# ──────────────────────────────────────────────────────
+# Controls arXiv paper download and file paths.
+# Paper selection: ViT cluster (Vision Transformer papers).
+
+data:
+  query: "vision transformer"      # arXiv search query
+  category: "cs.CV"               # Computer Vision category
+  max_results: 20                  # Download 20, keep best 10
+  keep_best: 10                    # Final number of papers
+  date_range: [2021, 2024]        # Year filter range
+
+paths:
+  raw_pdfs: "data/raw/"
+  parsed_pages: "data/parsed/pages/"
+  parsed_markdown: "data/parsed/markdown/"
+  chroma_index: "data/indices/chroma_index/"
+  multivectors: "data/indices/multivectors/"
+  doc_mapping: "data/indices/doc_mapping.json"
+  page_metadata: "data/indices/page_metadata.json"
+
+parsing:
+  dpi: 200                         # pdf2image resolution
+  image_format: "PNG"              # Output image format
+  marker_config: {}                # Marker default settings

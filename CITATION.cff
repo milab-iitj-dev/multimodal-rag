@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+title: "Healthcare Multimodal RAG: Retrieval-Augmented Generation for Medical Visual Question Answering"
+message: "If you use this software, please cite it as below."
+type: software
+version: "2.0.0"
+date-released: "2026-05-29"
+license: Apache-2.0
+repository-code: "https://github.com/milab-iitj-dev/mmrag-healthcare"
+authors:
+  - given-names: Gokul
+    affiliation: "Machine Intelligence Lab, IIT Jodhpur"
+keywords:
+  - multimodal
+  - retrieval-augmented-generation
+  - medical-vqa
+  - chest-x-ray
+  - llava
+  - colqwen2
+  - qlora

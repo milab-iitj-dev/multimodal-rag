@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────────────────
+# Unified MMRAG Configuration
+# ─────────────────────────────────────────────────────────
+# Controls domain routing, default pipeline selection,
+# and per-domain config directories.
+
+unified:
+  # Default domain when no explicit selection or auto-detection
+  default_domain: "healthcare"
+
+  # Available domains and their config directories
+  domains:
+    healthcare:
+      config_dir: "configs/healthcare"
+      description: "Chest X-ray VQA with ColQwen2 dual-index retrieval"
+      pipeline_module: "pipelines.healthcare.rag_vqa"
+      ui_module: "ui.healthcare.app"
+
+    scientific:
+      config_dir: "configs/scientific"
+      description: "Scientific paper QA with ColPali + SciNCL retrieval"
+      pipeline_module: "pipelines.scientific.online_pipeline"
+      ui_module: "ui.scientific.gradio_app"
+
+  # API settings
+  api:
+    host: "0.0.0.0"
+    port: 8000
+    reload: false
+
+  # Logging
+  logging:
+    level: "INFO"
+    log_dir: "outputs/logs"

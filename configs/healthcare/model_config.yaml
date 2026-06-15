@@ -1,0 +1,48 @@
+# ============================================================
+# Model Configuration — Healthcare MRAG Phase 4
+# ============================================================
+# Qwen2-VL-7B in pure BF16 for grounded medical VQA.
+# VRAM: ~15GB BF16 on A100 40GB (no quantization needed).
+#
+# Compatible with:
+#   transformers==4.47.1
+#   colpali-engine==0.3.8
+#   torch==2.5.1+cu124
+# ============================================================
+
+model:
+  name: "qwen2-vl-7b"
+  model_id: "Qwen/Qwen2-VL-7B-Instruct"
+  device: "auto"                          # "auto" → device_map="auto"
+
+  # Quantization DISABLED for A100 40GB.
+  # BF16 uses ~15GB VRAM, well within capacity.
+  quantization:
+    enabled: false
+
+  generation:
+    max_new_tokens: 512
+    temperature: 0.1
+    top_p: 0.9
+    do_sample: false
+    repetition_penalty: 1.1
+
+  # LoRA / QLoRA fine-tuning settings (future)
+  lora:
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+    target_modules:
+      - "q_proj"
+      - "v_proj"
+      - "k_proj"
+      - "o_proj"
+    bias: "none"
+    task_type: "CAUSAL_LM"
+
+# ============================================================
+# To switch to LLaVA-1.5-7B:
+#   name: "llava-1.5-7b"
+#   model_id: "llava-hf/llava-1.5-7b-hf"
+#   quantization.enabled: true
+# ============================================================

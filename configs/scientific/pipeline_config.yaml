@@ -1,0 +1,22 @@
+# ──────────────────────────────────────────────────────
+# PIPELINE CONFIGURATION
+# ──────────────────────────────────────────────────────
+# Controls offline/online pipeline execution settings.
+
+pipeline:
+  mode: "offline"                  # "offline" or "online"
+  batch_size: 4                    # Pages per embedding batch
+  checkpoint_interval: 1           # Save after every N PDFs
+  timeout_seconds: 3600           # 1 hour max per session
+
+  # Offline pipeline settings
+  offline:
+    save_as_kaggle_dataset: true
+    dataset_name: "sci-rag-index"
+    dataset_title: "Scientific RAG Index"
+
+  # Online pipeline settings
+  online:
+    max_query_length: 200          # Max characters in query
+    min_query_words: 3             # Minimum words in query
+    default_temperature: 0.3

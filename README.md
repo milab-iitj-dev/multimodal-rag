@@ -1,4 +1,4 @@
-# 🔬🏥 MMRAG Unified — Multimodal Retrieval-Augmented Generation
+ 🔬🏥 MMRAG Unified — Multimodal Retrieval-Augmented Generation
 
 **A unified system combining Healthcare and Scientific Multimodal RAG pipelines.**
 

@@ -76,10 +76,11 @@ _router = None
 
 
 def _get_router():
-    """Lazy-initialize the DomainRouter with pipeline adapters.
+    """Lazy-initialize the DomainRouter with real pipeline adapters.
 
-    Pipelines start in placeholder mode (inner_pipeline=None).
-    On HPC with models loaded, pass real pipeline instances.
+    Uses PipelineFactory to load actual RAGVQAPipeline / OnlinePipeline
+    when GPU and indices are available. Falls back to placeholder mode
+    (inner_pipeline=None) when resources are unavailable.
     """
     global _router
     if _router is not None:
@@ -88,11 +89,26 @@ def _get_router():
     from src.router.domain_router import DomainRouter
     from pipelines.healthcare.adapter import HealthcarePipeline
     from pipelines.scientific.adapter import ScientificPipeline
+    from src.api.pipeline_factory import (
+        create_healthcare_pipeline,
+        create_scientific_pipeline,
+    )
+
+    # Attempt to load real pipelines (returns None if unavailable)
+    logger.info("Initializing pipelines via PipelineFactory...")
+    health_inner = create_healthcare_pipeline()
+    sci_inner = create_scientific_pipeline()
 
     _router = DomainRouter()
-    _router.register("healthcare", HealthcarePipeline(inner_pipeline=None))
-    _router.register("scientific", ScientificPipeline(inner_pipeline=None))
-    logger.info("DomainRouter initialized with healthcare + scientific")
+    _router.register("healthcare", HealthcarePipeline(inner_pipeline=health_inner))
+    _router.register("scientific", ScientificPipeline(inner_pipeline=sci_inner))
+
+    status_h = "LIVE" if health_inner else "placeholder"
+    status_s = "LIVE" if sci_inner else "placeholder"
+    logger.info(
+        f"DomainRouter initialized: "
+        f"healthcare={status_h}, scientific={status_s}"
+    )
     return _router
 
 
@@ -234,14 +250,29 @@ async def health_check():
     summary="Readiness probe",
 )
 async def readiness_check():
-    """Readiness check — reports whether pipelines are registered."""
+    """Readiness check — reports whether pipelines are loaded (not just registered)."""
     try:
         router = _get_router()
         domains = list(router._pipelines.keys())
+
+        # Check which pipelines have real inner_pipeline loaded
+        live_domains = []
+        for name, pipe in router._pipelines.items():
+            if hasattr(pipe, 'inner') and pipe.inner is not None:
+                live_domains.append(name)
+
+        if live_domains:
+            detail = f"{len(live_domains)} LIVE pipeline(s): {', '.join(live_domains)}"
+        else:
+            detail = (
+                f"{len(domains)} domain(s) registered in placeholder mode. "
+                f"GPU/indices required for live pipelines."
+            )
+
         return ReadyResponse(
-            ready=len(domains) > 0,
+            ready=len(live_domains) > 0,
             domains=domains,
-            detail=f"{len(domains)} domain(s) registered",
+            detail=detail,
         )
     except Exception as e:
         return ReadyResponse(

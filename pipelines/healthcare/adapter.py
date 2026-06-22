@@ -45,7 +45,8 @@ class HealthcarePipeline(BasePipeline):
         Execute healthcare RAG pipeline and return UnifiedResponse.
 
         Delegates to RAGVQAPipeline.run_single(), then converts
-        the healthcare-specific RAGOutput into a UnifiedResponse.
+        the healthcare-specific RAGOutput into a UnifiedResponse
+        with full metadata for the frozen API contract.
         """
         if self.inner is None:
             return UnifiedResponse(
@@ -69,16 +70,24 @@ class HealthcarePipeline(BasePipeline):
         # Convert sources: RetrievedDocument → SourceItem
         sources = []
         for doc in output.retrieved_docs:
+            # Extract per-doc retrieval scores for the API contract
+            doc_meta = doc.metadata or {}
             sources.append(SourceItem(
                 title=f"Case {doc.doc_id}",
                 score=doc.score,
-                snippet=doc.metadata.get("findings", doc.text[:200] if doc.text else ""),
+                snippet=doc_meta.get(
+                    "findings", doc.text[:200] if doc.text else ""
+                ),
                 url="",
                 page_numbers=[],
                 metadata={
                     "doc_id": doc.doc_id,
-                    "rank": doc.metadata.get("rank", 0),
-                    "impression": doc.metadata.get("impression", ""),
+                    "rank": doc_meta.get("rank", 0),
+                    "impression": doc_meta.get("impression", ""),
+                    # Per-doc scores for retrieval_metadata mapping:
+                    "image_score": doc_meta.get("image_score", 0.0),
+                    "text_score": doc_meta.get("text_score", 0.0),
+                    "rrf_score": doc_meta.get("rrf_score", doc.score),
                 },
             ))
 
@@ -89,16 +98,34 @@ class HealthcarePipeline(BasePipeline):
             conf_score = output.confidence.score
             conf_level = output.confidence.level
 
+        # Extract grounding result
+        grounding_passed = True
+        was_corrected = False
+        if output.grounding_result:
+            grounding_passed = output.grounding_result.is_grounded
+            was_corrected = output.grounding_result.was_corrected
+
+        # Determine retrieval method for contract
+        retrieval_method = "fused"
+        query_type = output.metadata.get("query_type", "")
+        if query_type == "text_only":
+            retrieval_method = "scincl_only"
+
         return UnifiedResponse(
             domain="healthcare",
             answer=output.answer,
             confidence=conf_score,
             sources=sources,
             metadata={
+                # Confidence & verification fields
                 "confidence_level": conf_level,
-                "query_type": output.metadata.get("query_type", ""),
+                "grounding_passed": grounding_passed,
+                # Retrieval metadata for API contract
+                "retrieval_method": retrieval_method,
+                # Pipeline internals
+                "query_type": query_type,
                 "consensus": output.metadata.get("consensus", ""),
-                "was_corrected": output.metadata.get("was_corrected", False),
+                "was_corrected": was_corrected,
                 "retrieval_time_sec": output.retrieval_time_sec,
                 "generation_time_sec": output.generation_time_sec,
                 "total_time_sec": output.total_time_sec,

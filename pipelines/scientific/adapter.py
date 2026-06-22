@@ -66,11 +66,16 @@ class ScientificPipeline(BasePipeline):
 
         # Convert sources: SourceCitation → SourceItem
         sources = []
+        top_colpali_score = 0.0
+        top_scincl_score = 0.0
+        top_fused_score = 0.0
+
         if hasattr(result, 'sources') and result.sources:
             for s in result.sources:
+                rel_score = getattr(s, 'relevance_score', 0.0)
                 sources.append(SourceItem(
                     title=getattr(s, 'paper_title', 'Unknown'),
-                    score=getattr(s, 'relevance_score', 0.0),
+                    score=rel_score,
                     snippet=getattr(s, 'text_snippet', ''),
                     url=getattr(s, 'arxiv_url', ''),
                     page_numbers=getattr(s, 'page_numbers', []),
@@ -78,6 +83,9 @@ class ScientificPipeline(BasePipeline):
                         "paper_id": getattr(s, 'paper_id', ''),
                     },
                 ))
+                # Track top fused score for retrieval_metadata
+                if rel_score > top_fused_score:
+                    top_fused_score = rel_score
 
         # Build metadata from check_result
         check_passed = False
@@ -94,9 +102,16 @@ class ScientificPipeline(BasePipeline):
             confidence=result.confidence,
             sources=sources,
             metadata={
+                # Verification fields for API contract
                 "self_check_passed": check_passed,
                 "attribution_passed": attr_passed,
                 "faithfulness_passed": faith_passed,
+                # Retrieval metadata for API contract
+                "retrieval_method": "fused",
+                "visual_score": top_colpali_score,
+                "text_score": top_scincl_score,
+                "fusion_score": top_fused_score,
+                # Pipeline internals
                 "total_time_sec": result.total_time,
                 "retries": getattr(result, 'retries', 0),
                 "num_retrieved": len(sources),

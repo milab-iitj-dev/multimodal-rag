@@ -1,77 +1,86 @@
 """
-Unified MMRAG API — FastAPI endpoint for all domains.
+Unified MMRAG API — FastAPI application with frozen contract.
 
-Uses the domain-agnostic DomainRouter. The API has ZERO knowledge
-of healthcare or scientific internals. It calls router.route()
-and serializes the UnifiedResponse.
+Endpoints:
+    GET  /health  — Liveness check (always 200)
+    GET  /ready   — Readiness check (are pipelines loaded?)
+    POST /query   — Run a query through the appropriate pipeline
+
+The API has ZERO knowledge of healthcare or scientific internals.
+It calls router.route() and maps UnifiedResponse → QueryResponse.
 
 Usage:
     uvicorn src.api.app:app --host 0.0.0.0 --port 8000
 
-Endpoints:
-    POST /query     — Run a query through the appropriate pipeline
-    GET  /health    — Health check
-    GET  /domains   — List available domains
+OpenAPI docs:
+    http://localhost:8000/docs
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict
-from typing import Optional, List, Dict, Any
+import time
+import logging
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+
+from src.api.models import (
+    QueryRequest,
+    QueryResponse,
+    SourceItemResponse,
+    RetrievalMetadata,
+    RetrievalScores,
+    VerificationResult,
+    HealthResponse,
+    ReadyResponse,
+)
+
+logger = logging.getLogger("mmrag.api")
+
+
+# ── FastAPI app ─────────────────────────────────────────────
 
 app = FastAPI(
     title="MMRAG Unified API",
     description=(
         "Multimodal Retrieval-Augmented Generation for "
-        "Healthcare (chest X-ray VQA) and Scientific (paper QA) domains."
+        "Healthcare (chest X-ray VQA) and Scientific (paper QA) domains.\n\n"
+        "## Domains\n"
+        "- **healthcare** — ColQwen2 dual-index retrieval + Qwen2-VL generation\n"
+        "- **scientific** — ColPali + SciNCL retrieval + Qwen2-VL generation\n"
+        "- **auto** — Automatic domain routing based on query content\n\n"
+        "## Endpoints\n"
+        "- `GET /health` — Liveness probe\n"
+        "- `GET /ready` — Readiness probe (pipeline status)\n"
+        "- `POST /query` — Execute a RAG query"
     ),
     version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+# CORS — allow all origins for development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
-# ── Pydantic models (API contract) ──────────────────────────────
-
-class SourceItemModel(BaseModel):
-    """A single source/citation in the API response."""
-    title: str = ""
-    score: float = 0.0
-    snippet: str = ""
-    url: str = ""
-    page_numbers: List[int] = []
-    metadata: Dict[str, Any] = {}
-
-
-class QueryRequest(BaseModel):
-    """Request body for the /query endpoint."""
-    query: str
-    domain: Optional[str] = None   # "healthcare", "scientific", or None (auto)
-    image_path: Optional[str] = None
-    top_k: int = 3
-
-
-class QueryResponse(BaseModel):
-    """
-    Unified response from ANY domain pipeline.
-
-    This matches UnifiedResponse exactly.
-    """
-    domain: str
-    answer: str
-    confidence: float = 0.0
-    sources: List[SourceItemModel] = []
-    metadata: Dict[str, Any] = {}
-
-
-# ── Global router (initialized at startup) ──────────────────────
+# ── Global router (lazy init) ──────────────────────────────
 
 _router = None
 
 
 def _get_router():
-    """Lazy-init the domain router with placeholder pipelines."""
+    """Lazy-initialize the DomainRouter with pipeline adapters.
+
+    Pipelines start in placeholder mode (inner_pipeline=None).
+    On HPC with models loaded, pass real pipeline instances.
+    """
     global _router
     if _router is not None:
         return _router
@@ -83,90 +92,226 @@ def _get_router():
     _router = DomainRouter()
     _router.register("healthcare", HealthcarePipeline(inner_pipeline=None))
     _router.register("scientific", ScientificPipeline(inner_pipeline=None))
+    logger.info("DomainRouter initialized with healthcare + scientific")
     return _router
 
 
-# ── Endpoints ───────────────────────────────────────────────────
+# ── Response mapping helpers ────────────────────────────────
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy", "service": "mmrag-unified", "version": "2.0.0"}
+CONFIDENCE_THRESHOLD = 0.5
 
 
-@app.get("/domains")
-async def list_domains():
-    """List available domains and their status."""
-    return {
-        "domains": [
-            {
-                "name": "healthcare",
-                "description": "Chest X-ray VQA with ColQwen2 + grounding verification",
-                "status": "available",
-            },
-            {
-                "name": "scientific",
-                "description": "Scientific paper QA with ColPali + SciNCL + self-check",
-                "status": "available",
-            },
-        ]
-    }
+def _map_sources(unified_response) -> list[SourceItemResponse]:
+    """Map UnifiedResponse.sources → List[SourceItemResponse]."""
+    sources = []
+    for s in unified_response.sources:
+        doc_id = s.metadata.get("doc_id", "") or s.metadata.get("paper_id", "")
+        page = 0
+        if s.page_numbers:
+            page = s.page_numbers[0]
+
+        sources.append(
+            SourceItemResponse(
+                doc_id=str(doc_id),
+                page=page,
+                title=s.title,
+                relevance_score=round(s.score, 4),
+                snippet=s.snippet,
+            )
+        )
+    return sources
 
 
-@app.post("/query", response_model=QueryResponse)
-async def run_query(request: QueryRequest):
+def _map_retrieval_metadata(unified_response) -> RetrievalMetadata:
+    """Map UnifiedResponse.metadata → RetrievalMetadata.
+
+    Healthcare:
+        colpali = image retrieval score (ColQwen2 image)
+        scincl  = text retrieval score (ColQwen2 text)
+        fused   = RRF fused score
+        method  = "fused"
+
+    Scientific:
+        colpali = ColPali visual score
+        scincl  = SciNCL text score
+        fused   = weighted fusion score
+        method  = from pipeline metadata
     """
-    Run a query through the appropriate domain pipeline.
+    meta = unified_response.metadata
+    domain = unified_response.domain
 
-    Domain detection:
-      1. Explicit 'domain' parameter (if provided)
-      2. Auto-detection from query keywords
-      3. Config default (healthcare)
+    # Extract scores from metadata (pipelines populate these)
+    colpali_score = meta.get("colpali_score", 0.0)
+    scincl_score = meta.get("scincl_score", 0.0)
+    fused_score = meta.get("fused_score", 0.0)
 
-    Returns:
-      QueryResponse (identical schema for ALL domains).
+    # Healthcare: extract from top source if available
+    if domain == "healthcare" and unified_response.sources:
+        top = unified_response.sources[0]
+        top_meta = top.metadata
+        colpali_score = colpali_score or top_meta.get("image_score", top.score)
+        scincl_score = scincl_score or top_meta.get("text_score", 0.0)
+        fused_score = fused_score or top_meta.get("rrf_score", top.score)
+
+    # Scientific: extract from metadata
+    if domain == "scientific":
+        colpali_score = colpali_score or meta.get("visual_score", 0.0)
+        scincl_score = scincl_score or meta.get("text_score", 0.0)
+        fused_score = fused_score or meta.get("fusion_score", 0.0)
+
+    # Determine method
+    method = meta.get("retrieval_method", "fused")
+    if method not in ("fused", "colpali_only", "scincl_only"):
+        method = "fused"
+
+    return RetrievalMetadata(
+        method=method,
+        scores=RetrievalScores(
+            colpali=round(float(colpali_score), 4),
+            scincl=round(float(scincl_score), 4),
+            fused=round(float(fused_score), 4),
+        ),
+    )
+
+
+def _map_verification(unified_response) -> VerificationResult:
+    """Map UnifiedResponse.metadata → VerificationResult.
+
+    Healthcare:
+        attribution     = grounding_passed (from GroundingVerifier)
+        faithfulness    = confidence >= 0.5
+        confidence_pass = confidence_level != "LOW"
+
+    Scientific:
+        attribution     = attribution_passed (from SelfCheck)
+        faithfulness    = faithfulness_passed (from SelfCheck)
+        confidence_pass = self_check_passed
+    """
+    meta = unified_response.metadata
+    domain = unified_response.domain
+    confidence = unified_response.confidence
+
+    if domain == "healthcare":
+        attribution = meta.get("grounding_passed", True)
+        faithfulness = confidence >= CONFIDENCE_THRESHOLD
+        conf_level = meta.get("confidence_level", "UNKNOWN")
+        confidence_pass = conf_level.upper() != "LOW"
+    elif domain == "scientific":
+        attribution = meta.get("attribution_passed", True)
+        faithfulness = meta.get("faithfulness_passed", True)
+        confidence_pass = meta.get("self_check_passed", True)
+    else:
+        # Unknown domain — default to True
+        attribution = True
+        faithfulness = True
+        confidence_pass = True
+
+    return VerificationResult(
+        attribution=bool(attribution),
+        faithfulness=bool(faithfulness),
+        confidence_pass=bool(confidence_pass),
+    )
+
+
+# ── Endpoints ───────────────────────────────────────────────
+
+
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    tags=["System"],
+    summary="Liveness probe",
+)
+async def health_check():
+    """Health check — always returns 200 if the service is running."""
+    return HealthResponse()
+
+
+@app.get(
+    "/ready",
+    response_model=ReadyResponse,
+    tags=["System"],
+    summary="Readiness probe",
+)
+async def readiness_check():
+    """Readiness check — reports whether pipelines are registered."""
+    try:
+        router = _get_router()
+        domains = list(router._pipelines.keys())
+        return ReadyResponse(
+            ready=len(domains) > 0,
+            domains=domains,
+            detail=f"{len(domains)} domain(s) registered",
+        )
+    except Exception as e:
+        return ReadyResponse(
+            ready=False,
+            domains=[],
+            detail=f"Router initialization failed: {e}",
+        )
+
+
+@app.post(
+    "/query",
+    response_model=QueryResponse,
+    tags=["Query"],
+    summary="Execute a RAG query",
+    description=(
+        "Submit a natural-language query. The system retrieves "
+        "relevant evidence documents and generates an answer.\n\n"
+        'Set `domain="auto"` to let the system automatically '
+        "detect the appropriate pipeline based on query content."
+    ),
+)
+async def run_query(request: QueryRequest):
+    """Execute a query through the appropriate domain pipeline.
+
+    1. Route query to the correct domain pipeline (or auto-detect)
+    2. Execute the pipeline
+    3. Map UnifiedResponse → QueryResponse (frozen contract)
+    4. Return with timing information
     """
     router = _get_router()
 
-    # Load image if path provided
+    # Load image if needed
     image = None
-    if request.image_path:
-        try:
-            from src.shared.image_utils import load_image
-            image = load_image(request.image_path)
-        except Exception as e:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Failed to load image: {e}",
-            )
+    # (image loading from path is not part of the frozen contract,
+    #  but the pipeline adapters accept Optional[Image])
+
+    # Map domain: "auto" → None (triggers auto-detection in router)
+    domain_hint = request.domain if request.domain != "auto" else None
+
+    # Execute with timing
+    start_ms = time.monotonic_ns() // 1_000_000
 
     try:
         result = router.route(
             query=request.query,
-            domain_hint=request.domain,
+            domain_hint=domain_hint,
             image=image,
             top_k=request.top_k,
         )
     except KeyError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid domain: {e}",
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Pipeline error: {e}")
+        logger.exception("Pipeline error")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Pipeline error: {e}",
+        )
 
-    # Convert UnifiedResponse → QueryResponse (Pydantic)
+    end_ms = time.monotonic_ns() // 1_000_000
+    latency = int(end_ms - start_ms)
+
+    # Map UnifiedResponse → QueryResponse (frozen contract)
     return QueryResponse(
-        domain=result.domain,
         answer=result.answer,
-        confidence=result.confidence,
-        sources=[
-            SourceItemModel(
-                title=s.title,
-                score=s.score,
-                snippet=s.snippet,
-                url=s.url,
-                page_numbers=s.page_numbers,
-                metadata=s.metadata,
-            )
-            for s in result.sources
-        ],
-        metadata=result.metadata,
+        confidence=round(result.confidence, 4),
+        sources=_map_sources(result),
+        retrieval_metadata=_map_retrieval_metadata(result),
+        verification=_map_verification(result),
+        latency_ms=latency,
     )

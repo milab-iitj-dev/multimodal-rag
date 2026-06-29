@@ -253,7 +253,6 @@ async def readiness_check():
     """Readiness check — reports whether pipelines are loaded (not just registered)."""
     try:
         router = _get_router()
-        domains = list(router._pipelines.keys())
 
         # Check which pipelines have real inner_pipeline loaded
         live_domains = []
@@ -262,16 +261,21 @@ async def readiness_check():
                 live_domains.append(name)
 
         if live_domains:
-            detail = f"{len(live_domains)} LIVE pipeline(s): {', '.join(live_domains)}"
+            # Format: "Healthcare pipeline LIVE" or
+            #         "Healthcare, Scientific pipelines LIVE"
+            names = ", ".join(d.capitalize() for d in live_domains)
+            suffix = "pipeline" if len(live_domains) == 1 else "pipelines"
+            detail = f"{names} {suffix} LIVE"
         else:
+            all_domains = list(router._pipelines.keys())
             detail = (
-                f"{len(domains)} domain(s) registered in placeholder mode. "
+                f"{len(all_domains)} domain(s) registered in placeholder mode. "
                 f"GPU/indices required for live pipelines."
             )
 
         return ReadyResponse(
             ready=len(live_domains) > 0,
-            domains=domains,
+            domains=live_domains,
             detail=detail,
         )
     except Exception as e:

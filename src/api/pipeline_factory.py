@@ -133,15 +133,17 @@ def create_scientific_pipeline() -> Optional[object]:
         OnlinePipeline instance, or None if resources are unavailable.
     """
     if not _has_gpu():
-        logger.warning(
-            "Scientific pipeline: No GPU available — using placeholder mode"
-        )
+        logger.info("Scientific pipeline disabled — no GPU available")
         return None
 
     try:
         config_path = _resolve_config_path(
             "configs/scientific/config.yaml"
         )
+
+        if not os.path.exists(config_path):
+            logger.info("Scientific pipeline disabled — config not found")
+            return None
 
         with open(config_path, "r") as f:
             sci_config = yaml.safe_load(f)
@@ -156,9 +158,9 @@ def create_scientific_pipeline() -> Optional[object]:
 
         metadata_path = os.path.join(indices_dir, "page_metadata.json")
         if not os.path.exists(metadata_path):
-            logger.warning(
-                f"Scientific index not found at {metadata_path} — "
-                "using placeholder mode"
+            logger.info(
+                f"Scientific pipeline disabled — index not found at "
+                f"{metadata_path}"
             )
             return None
 
@@ -170,5 +172,6 @@ def create_scientific_pipeline() -> Optional[object]:
         return pipeline
 
     except Exception as e:
-        logger.error(f"Failed to load Scientific pipeline: {e}")
+        logger.info(f"Scientific pipeline disabled — {e}")
         return None
+

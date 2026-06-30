@@ -130,9 +130,9 @@ def _map_sources(unified_response) -> list[SourceItemResponse]:
             SourceItemResponse(
                 doc_id=str(doc_id),
                 page=page,
-                title=s.title,
+                title=s.title or "",
                 relevance_score=round(s.score, 4),
-                snippet=s.snippet,
+                snippet=s.snippet or "",
             )
         )
     return sources

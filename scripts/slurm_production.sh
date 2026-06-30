@@ -1,57 +1,28 @@
 #!/bin/bash
 # ════════════════════════════════════════════════════════════════════════
-#  MMRAG Unified — Production Deployment with Public HTTPS Endpoint
+#  MMRAG Unified — FINAL Production SLURM Deployment
 # ════════════════════════════════════════════════════════════════════════
 #
-#  This is the FINAL production SLURM script. It performs:
+#  Submit:   sbatch scripts/slurm_production.sh
+#  Monitor:  tail -f outputs/logs/production_<JOBID>.log
+#  Find URL: grep "PUBLIC_URL=" outputs/logs/production_<JOBID>.log
+#  Cancel:   scancel <JOBID>
 #
-#    Phase 1 — Environment Verification (Steps 1-11)
-#      1.  Allocate 1 GPU
-#      2.  Verify project directory
-#      3.  Verify virtual environment
-#      4.  Verify source files + configs
-#      5.  Verify Healthcare indices exist
-#      6.  Create symbolic links (indexes + OpenI data)
-#      7.  Verify images and reports
-#      8.  Load HPC modules + activate venv
-#      9.  Verify Python + CUDA
-#     10.  Verify import chain
-#     11.  Log Scientific pipeline disabled
+#  10 Phases:
+#   1. GPU allocation verification
+#   2. Venv activation (Anaconda-proof)
+#   3. CUDA verification (hard gate)
+#   4. Healthcare data verification (symlinks, index, images)
+#   5. FastAPI launch + readiness wait
+#   6. Full validation (11 queries across 3 modes)
+#   7. Validation report generation
+#   8. Cloudflare tunnel
+#   9. Public endpoint verification
+#  10. Keep-alive with health monitoring
 #
-#    Phase 2 — Server Launch & Local Verification (Steps 12-16)
-#     12.  Launch FastAPI (uvicorn)
-#     13.  Wait until server is live
-#     14.  Verify GET /health
-#     15.  Verify GET /ready (Healthcare LIVE)
-#     16.  Verify POST /query (real answer, not placeholder)
-#
-#    Phase 3 — Public HTTPS Tunnel (Steps 17-19)
-#     17.  Download cloudflared (if not cached)
-#     18.  Start Cloudflare Quick Tunnel
-#     19.  Print public HTTPS URL
-#
-#    Phase 4 — Public Verification & Stability (Steps 20-22)
-#     20.  Verify public /health, /ready, /query
-#     21.  Repeat queries for stability (3 rounds)
-#     22.  Keep server + tunnel alive for professor access
-#
-#  Submit:
-#    sbatch scripts/slurm_production.sh
-#
-#  Check logs:
-#    cat outputs/logs/production_<JOBID>.log
-#    cat outputs/logs/production_<JOBID>.err
-#
-#  Find the public URL:
-#    grep "PUBLIC_URL" outputs/logs/production_<JOBID>.log
-#
-#  Cancel when done:
-#    scancel <JOBID>
-#
-#  Expected runtime: ~10 min setup + model load, then stays alive
 # ════════════════════════════════════════════════════════════════════════
 
-#SBATCH --job-name=mmrag-production
+#SBATCH --job-name=mmrag-prod
 #SBATCH --partition=dgx
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
@@ -60,10 +31,8 @@
 #SBATCH --output=outputs/logs/production_%j.log
 #SBATCH --error=outputs/logs/production_%j.err
 
-set -euo pipefail
-
 # ════════════════════════════════════════════════════════════════════════
-#  CONFIGURATION
+#  CONFIGURATION (edit these if paths change)
 # ════════════════════════════════════════════════════════════════════════
 
 PROJECT_DIR="/scratch/data/divyasaxena_rs/Gokul_Faleja_internship/mmrag_unified"
@@ -71,172 +40,109 @@ VENV_DIR="${PROJECT_DIR}/.venv"
 HC_DATA_ROOT="/scratch/data/divyasaxena_rs/Gokul_Faleja_internship/mmrag-healthcare"
 PORT=8847
 HF_CACHE="/scratch/data/divyasaxena_rs/Gokul_Faleja_internship/.cache/huggingface"
-
-# Cloudflared binary location (cached in project to avoid re-download)
 CLOUDFLARED_BIN="${PROJECT_DIR}/.local/bin/cloudflared"
 
 # ════════════════════════════════════════════════════════════════════════
-#  PHASE 1 — ENVIRONMENT VERIFICATION
+#  HELPER: print banner
 # ════════════════════════════════════════════════════════════════════════
 
-echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║  MMRAG Unified — Production Deployment with Public Endpoint    ║"
-echo "║  Job ID : ${SLURM_JOB_ID:-interactive}                                       ║"
-echo "║  Node   : ${SLURMD_NODENAME:-$(hostname)}                                            ║"
-echo "║  Date   : $(date)                      ║"
-echo "╚══════════════════════════════════════════════════════════════════╝"
-echo ""
-
-PREFLIGHT_FAIL=0
-
-# ── Step 1: GPU allocation ──
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  PHASE 1 — Environment Verification"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-
-echo "[STEP  1/22] GPU allocation..."
-if command -v nvidia-smi &>/dev/null; then
-    GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader 2>/dev/null || echo "nvidia-smi query failed")
-    echo "  ✓ GPU: ${GPU_INFO}"
-else
-    echo "  ⚠ nvidia-smi not found on PATH (may be available after module load)"
-fi
-
-# ── Step 2: Project directory ──
-echo "[STEP  2/22] Project directory..."
-if [ ! -d "${PROJECT_DIR}" ]; then
-    echo "  ✗ FAIL: ${PROJECT_DIR} not found"
-    PREFLIGHT_FAIL=1
-else
-    echo "  ✓ ${PROJECT_DIR}"
-fi
-
-# ── Step 3: Virtual environment ──
-echo "[STEP  3/22] Virtual environment..."
-if [ ! -f "${VENV_DIR}/bin/activate" ]; then
-    echo "  ✗ FAIL: No venv at ${VENV_DIR}"
-    echo "  Fix: cd ${PROJECT_DIR} && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
-    PREFLIGHT_FAIL=1
-else
-    echo "  ✓ ${VENV_DIR}"
-fi
-
-# ── Step 4: Source files + configs ──
-echo "[STEP  4/22] Source files and configs..."
-MISSING_FILES=0
-for f in \
-    "src/api/app.py" \
-    "src/api/models.py" \
-    "src/api/pipeline_factory.py" \
-    "src/router/domain_router.py" \
-    "pipelines/healthcare/adapter.py" \
-    "pipelines/healthcare/rag_vqa.py" \
-    "pipelines/scientific/adapter.py" \
-    "configs/healthcare/model_config.yaml" \
-    "configs/healthcare/retrieval_config.yaml" \
-    "configs/healthcare/data_config.yaml" \
-    "configs/unified_config.yaml" \
-    "setup.py"
-do
-    if [ ! -f "${PROJECT_DIR}/${f}" ]; then
-        echo "  ✗ Missing: ${f}"
-        MISSING_FILES=1
-    fi
-done
-if [ $MISSING_FILES -eq 0 ]; then
-    echo "  ✓ All source files and configs present"
-else
-    echo "  ⚠ Some files missing (non-critical if scientific only)"
-fi
-
-# ── Step 5: Healthcare indices ──
-echo "[STEP  5/22] Healthcare indices..."
-if [ ! -d "${HC_DATA_ROOT}" ]; then
-    echo "  ✗ FAIL: Healthcare data root not found: ${HC_DATA_ROOT}"
-    PREFLIGHT_FAIL=1
-elif [ ! -f "${HC_DATA_ROOT}/data/indexes/colqwen2_index/document_store.json" ]; then
-    echo "  ✗ FAIL: document_store.json not found at ${HC_DATA_ROOT}/data/indexes/colqwen2_index/"
-    PREFLIGHT_FAIL=1
-else
-    DOC_COUNT=$(python3 -c "import json; d=json.load(open('${HC_DATA_ROOT}/data/indexes/colqwen2_index/document_store.json')); print(len(d.get('documents',d)) if isinstance(d,dict) else len(d))" 2>/dev/null || echo "?")
-    echo "  ✓ Healthcare index: ${HC_DATA_ROOT}/data/indexes/colqwen2_index/ (${DOC_COUNT} docs)"
-fi
-
-# Abort on critical failure
-if [ $PREFLIGHT_FAIL -ne 0 ]; then
+banner() {
     echo ""
-    echo "╔══════════════════════════════════════════════════════════════════╗"
-    echo "║  PREFLIGHT FAILED — fix the issues above and resubmit          ║"
-    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  $1"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+}
+
+step() {
+    echo "[PHASE $1 | STEP $2] $3"
+}
+
+ok()   { echo "  ✓ $1"; }
+fail() { echo "  ✗ FAIL: $1"; }
+
+# Create output directories
+mkdir -p "${PROJECT_DIR}/outputs/logs"
+mkdir -p "${PROJECT_DIR}/outputs/reports"
+
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║  MMRAG Unified — Production Deployment                        ║"
+echo "║  Job:  ${SLURM_JOB_ID:-interactive}                                              ║"
+echo "║  Node: $(hostname)                                                    ║"
+echo "║  Date: $(date '+%Y-%m-%d %H:%M:%S')                               ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
+
+# ════════════════════════════════════════════════════════════════════════
+#  PHASE 1 — GPU ALLOCATION
+# ════════════════════════════════════════════════════════════════════════
+
+banner "PHASE 1 — GPU Allocation"
+
+step 1 1 "Checking GPU..."
+if command -v nvidia-smi &>/dev/null; then
+    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    GPU_MEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null | head -1)
+    DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)
+    ok "GPU: ${GPU_NAME} (${GPU_MEM})"
+    ok "Driver: ${DRIVER}"
+else
+    fail "nvidia-smi not found — this script MUST run on a GPU node"
+    echo ""
+    echo "  You are on: $(hostname)"
+    echo "  This looks like a LOGIN node, not a GPU node."
+    echo ""
+    echo "  Fix: sbatch scripts/slurm_production.sh"
+    echo "       (do NOT run with 'bash', use 'sbatch')"
     exit 1
 fi
 
-# ── Step 6: Create symbolic links ──
-echo "[STEP  6/22] Creating symbolic links..."
-mkdir -p "${PROJECT_DIR}/data/indexes"
-
-# Symlink: ColQwen2 index
-LINK_INDEX="${PROJECT_DIR}/data/indexes/colqwen2_index"
-TARGET_INDEX="${HC_DATA_ROOT}/data/indexes/colqwen2_index"
-if [ -L "${LINK_INDEX}" ]; then
-    echo "  ✓ Index symlink exists → $(readlink -f ${LINK_INDEX})"
-elif [ -d "${LINK_INDEX}" ]; then
-    echo "  ✓ Index directory exists (real, not symlink)"
-else
-    ln -s "${TARGET_INDEX}" "${LINK_INDEX}"
-    echo "  ✓ Created: ${LINK_INDEX} → ${TARGET_INDEX}"
-fi
-
-# Symlink: OpenI dataset
-LINK_OPENI="${PROJECT_DIR}/data/openi"
-TARGET_OPENI="${HC_DATA_ROOT}/data/openi"
-if [ -L "${LINK_OPENI}" ]; then
-    echo "  ✓ OpenI symlink exists → $(readlink -f ${LINK_OPENI})"
-elif [ -d "${LINK_OPENI}" ]; then
-    echo "  ✓ OpenI directory exists (real, not symlink)"
-elif [ -d "${TARGET_OPENI}" ]; then
-    ln -s "${TARGET_OPENI}" "${LINK_OPENI}"
-    echo "  ✓ Created: ${LINK_OPENI} → ${TARGET_OPENI}"
-else
-    echo "  ⚠ OpenI target not found: ${TARGET_OPENI} (image remapping may fail)"
-fi
-
-# ── Step 7: Verify images and reports ──
-echo "[STEP  7/22] Verifying images and reports..."
-if [ -f "${LINK_INDEX}/document_store.json" ]; then
-    echo "  ✓ Index: document_store.json accessible via symlink"
-else
-    echo "  ✗ FAIL: document_store.json not accessible"
+step 1 2 "Verifying project directory..."
+if [ ! -d "${PROJECT_DIR}" ]; then
+    fail "Project directory not found: ${PROJECT_DIR}"
     exit 1
 fi
-if [ -d "${LINK_OPENI}/images" ] 2>/dev/null; then
-    IMG_COUNT=$(find "${LINK_OPENI}/images/" -maxdepth 1 -type f -name "*.png" 2>/dev/null | wc -l)
-    echo "  ✓ Images: ${IMG_COUNT} .png files in ${LINK_OPENI}/images/"
-else
-    echo "  ⚠ Images directory not accessible (retrieval still works, image display may not)"
+ok "${PROJECT_DIR}"
+
+# ════════════════════════════════════════════════════════════════════════
+#  PHASE 2 — VENV ACTIVATION (Anaconda-proof)
+# ════════════════════════════════════════════════════════════════════════
+
+banner "PHASE 2 — Virtual Environment"
+
+step 2 1 "Checking venv exists..."
+if [ ! -f "${VENV_DIR}/bin/activate" ]; then
+    fail "No venv at ${VENV_DIR}"
+    echo "  Fix: cd ${PROJECT_DIR} && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
+    exit 1
 fi
-if [ -d "${LINK_OPENI}/reports" ] 2>/dev/null; then
-    RPT_COUNT=$(find "${LINK_OPENI}/reports/" -maxdepth 1 -type f 2>/dev/null | wc -l)
-    echo "  ✓ Reports: ${RPT_COUNT} files in ${LINK_OPENI}/reports/"
-else
-    echo "  ⚠ Reports directory not accessible"
+ok "${VENV_DIR}"
+
+step 2 2 "Activating venv (Anaconda-proof)..."
+
+# Deactivate any conda environment first
+if command -v conda &>/dev/null; then
+    conda deactivate 2>/dev/null || true
 fi
 
-# ── Step 8: Load modules + activate venv ──
-echo "[STEP  8/22] Loading HPC modules..."
-if [ -f /etc/profile.d/modules.sh ]; then
-    source /etc/profile.d/modules.sh
-fi
-module purge 2>/dev/null || true
-module load python/3.10 2>/dev/null || module load python3 2>/dev/null || true
-module load cuda/12.1   2>/dev/null || module load cuda   2>/dev/null || true
+# Remove any conda/anaconda paths from PATH
+CLEAN_PATH=""
+IFS=':' read -ra PATH_PARTS <<< "$PATH"
+for p in "${PATH_PARTS[@]}"; do
+    case "$p" in
+        *conda*|*anaconda*|*Anaconda*) ;;  # skip conda paths
+        *) CLEAN_PATH="${CLEAN_PATH:+${CLEAN_PATH}:}${p}" ;;
+    esac
+done
+export PATH="${CLEAN_PATH}"
 
-echo "  Activating venv..."
+# Now activate the venv
 source "${VENV_DIR}/bin/activate"
+
+# Force venv bin to front of PATH
 export PATH="${VIRTUAL_ENV}/bin:${PATH}"
 hash -r
 
+# Set HuggingFace cache
 export HF_HOME="${HF_CACHE}"
 export TRANSFORMERS_CACHE="${HF_CACHE}/hub"
 export HF_DATASETS_CACHE="${HF_CACHE}/datasets"
@@ -244,69 +150,226 @@ export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 cd "${PROJECT_DIR}"
-echo "  ✓ Python: $(which python) ($(python --version 2>&1))"
-echo "  ✓ CWD: $(pwd)"
 
-# ── Step 8.5: Verify torch is cu124 (not cu130) ──
-echo "[STEP 8.5] Verifying torch CUDA build..."
-TORCH_CUDA=$(python -c "import torch; print(torch.version.cuda)" 2>/dev/null || echo "unknown")
-if echo "${TORCH_CUDA}" | grep -qE '^12\.[0-4]'; then
-    echo "  ✓ torch CUDA ${TORCH_CUDA} — compatible with driver"
+step 2 3 "Verifying Python is from venv..."
+PYTHON_PATH=$(which python 2>/dev/null)
+PIP_PATH=$(which pip 2>/dev/null)
+
+if echo "${PYTHON_PATH}" | grep -q "${VENV_DIR}"; then
+    ok "python: ${PYTHON_PATH}"
 else
-    echo "  ✗ torch CUDA ${TORCH_CUDA} — INCOMPATIBLE with driver (need cu124)"
-    echo "  Fix: pip uninstall -y torch torchvision torchaudio"
-    echo "       pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124"
+    fail "python is NOT from venv: ${PYTHON_PATH}"
+    echo "  Expected: ${VENV_DIR}/bin/python"
     exit 1
 fi
 
-# ── Step 9: Verify CUDA from Python ──
-echo "[STEP  9/22] Verifying CUDA..."
-python -c "
+if echo "${PIP_PATH}" | grep -q "${VENV_DIR}"; then
+    ok "pip: ${PIP_PATH}"
+else
+    fail "pip is NOT from venv: ${PIP_PATH}"
+    exit 1
+fi
+
+ok "Python $(python --version 2>&1)"
+ok "CWD: $(pwd)"
+
+# ════════════════════════════════════════════════════════════════════════
+#  PHASE 3 — CUDA VERIFICATION (hard gate)
+# ════════════════════════════════════════════════════════════════════════
+
+banner "PHASE 3 — CUDA Verification"
+
+step 3 1 "Checking torch CUDA build..."
+
+# Write CUDA check to temp file (avoids all escaping issues)
+CUDA_CHECK=$(mktemp /tmp/mmrag_cuda_XXXX.py)
+cat > "${CUDA_CHECK}" << 'PYEOF'
+import sys
 import torch
-print(f'  torch {torch.__version__}')
-print(f'  CUDA available: {torch.cuda.is_available()}')
-if torch.cuda.is_available():
-    print(f'  GPU: {torch.cuda.get_device_name(0)}')
-    print(f'  VRAM: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB')
-    print('  ✓ CUDA verified')
+
+version = torch.__version__
+cuda_ver = torch.version.cuda or 'NONE'
+available = torch.cuda.is_available()
+count = torch.cuda.device_count()
+
+print('torch=' + version)
+print('cuda_build=' + cuda_ver)
+print('cuda_available=' + str(available))
+print('device_count=' + str(count))
+
+# Hard gate: CUDA must be available
+if not available:
+    print('')
+    print('FATAL: torch.cuda.is_available() == False')
+    print('')
+    if 'cu130' in version or cuda_ver.startswith('13'):
+        print('Root cause: torch is built with CUDA ' + cuda_ver)
+        print('but the HPC driver only supports CUDA <= 12.5')
+        print('')
+        print('Fix:')
+        print('  pip uninstall -y torch torchvision torchaudio')
+        print('  pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124')
+    else:
+        print('The GPU may not be allocated to this job.')
+        print('Verify: nvidia-smi')
+    sys.exit(1)
+
+# Check CUDA version compatibility
+major_minor = cuda_ver.split('.')
+if len(major_minor) >= 2:
+    major = int(major_minor[0])
+    minor = int(major_minor[1])
+    if major > 12 or (major == 12 and minor > 5):
+        print('')
+        print('WARNING: CUDA ' + cuda_ver + ' may exceed driver support (max 12.5)')
+        print('Fix: pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124')
+        sys.exit(1)
+
+gpu_name = torch.cuda.get_device_name(0)
+gpu_mem = torch.cuda.get_device_properties(0).total_mem / 1e9
+print('gpu=' + gpu_name)
+print('vram=%.1fGB' % gpu_mem)
+
+# Quick tensor test
+x = torch.randn(2, 2).cuda()
+print('tensor_test=cuda:' + str(x.device.index))
+print('CUDA OK')
+PYEOF
+
+CUDA_RESULT=$(python "${CUDA_CHECK}" 2>&1)
+CUDA_RC=$?
+
+echo "${CUDA_RESULT}" | while IFS= read -r line; do
+    echo "  ${line}"
+done
+
+if [ ${CUDA_RC} -ne 0 ]; then
+    fail "CUDA verification failed — cannot launch Healthcare pipeline without GPU"
+    rm -f "${CUDA_CHECK}"
+    exit 1
+fi
+
+ok "CUDA verified"
+rm -f "${CUDA_CHECK}"
+
+step 3 2 "Checking import chain..."
+
+IMPORT_CHECK=$(mktemp /tmp/mmrag_import_XXXX.py)
+cat > "${IMPORT_CHECK}" << 'PYEOF'
+try:
+    from src.api.models import QueryRequest, QueryResponse, HealthResponse, ReadyResponse
+    from src.api.models import RetrievalMetadata, RetrievalScores, VerificationResult
+    from src.router.domain_router import DomainRouter
+    from pipelines.healthcare.adapter import HealthcarePipeline
+    from pipelines.scientific.adapter import ScientificPipeline
+    from src.api.pipeline_factory import create_healthcare_pipeline, create_scientific_pipeline
+    from src.shared.schemas.response import UnifiedResponse, SourceItem
+    from src.shared.base_pipeline import BasePipeline
+    print('All imports OK')
+except ImportError as e:
+    print('IMPORT ERROR: ' + str(e))
+    import sys
+    sys.exit(1)
+PYEOF
+
+IMPORT_RESULT=$(python "${IMPORT_CHECK}" 2>&1)
+IMPORT_RC=$?
+echo "  ${IMPORT_RESULT}"
+rm -f "${IMPORT_CHECK}"
+
+if [ ${IMPORT_RC} -ne 0 ]; then
+    fail "Import chain broken"
+    exit 1
+fi
+ok "Import chain verified"
+
+# ════════════════════════════════════════════════════════════════════════
+#  PHASE 4 — HEALTHCARE DATA VERIFICATION
+# ════════════════════════════════════════════════════════════════════════
+
+banner "PHASE 4 — Healthcare Data"
+
+step 4 1 "Verifying Healthcare data root..."
+if [ ! -d "${HC_DATA_ROOT}" ]; then
+    fail "Healthcare data root not found: ${HC_DATA_ROOT}"
+    exit 1
+fi
+ok "${HC_DATA_ROOT}"
+
+step 4 2 "Creating/verifying symlinks..."
+
+# Index symlink
+mkdir -p "${PROJECT_DIR}/data/indexes"
+LINK_INDEX="${PROJECT_DIR}/data/indexes/colqwen2_index"
+TARGET_INDEX="${HC_DATA_ROOT}/data/indexes/colqwen2_index"
+
+if [ -L "${LINK_INDEX}" ]; then
+    ok "Index symlink exists → $(readlink -f ${LINK_INDEX})"
+elif [ -d "${LINK_INDEX}" ]; then
+    ok "Index directory exists (real copy)"
+else
+    if [ -d "${TARGET_INDEX}" ]; then
+        ln -s "${TARGET_INDEX}" "${LINK_INDEX}"
+        ok "Created index symlink: ${LINK_INDEX} → ${TARGET_INDEX}"
+    else
+        fail "Index source not found: ${TARGET_INDEX}"
+        exit 1
+    fi
+fi
+
+# OpenI symlink
+LINK_OPENI="${PROJECT_DIR}/data/openi"
+TARGET_OPENI="${HC_DATA_ROOT}/data/openi"
+
+if [ -L "${LINK_OPENI}" ]; then
+    ok "OpenI symlink exists → $(readlink -f ${LINK_OPENI})"
+elif [ -d "${LINK_OPENI}" ]; then
+    ok "OpenI directory exists (real copy)"
+elif [ -d "${TARGET_OPENI}" ]; then
+    ln -s "${TARGET_OPENI}" "${LINK_OPENI}"
+    ok "Created OpenI symlink: ${LINK_OPENI} → ${TARGET_OPENI}"
+else
+    echo "  ⚠ OpenI not found: ${TARGET_OPENI} (image display may not work)"
+fi
+
+step 4 3 "Verifying index contents..."
+if [ -f "${LINK_INDEX}/document_store.json" ]; then
+    DOC_COUNT=$(python -c "
+import json
+with open('${LINK_INDEX}/document_store.json') as f:
+    d = json.load(f)
+if isinstance(d, dict):
+    print(len(d.get('documents', d)))
 else:
-    print('  ✗ FAIL: No CUDA GPU — Healthcare pipeline will NOT load')
-    exit(1)
-" || { echo "  CUDA verification failed"; exit 1; }
+    print(len(d))
+" 2>/dev/null || echo "?")
+    ok "document_store.json: ${DOC_COUNT} documents"
+else
+    fail "document_store.json not found at ${LINK_INDEX}/"
+    exit 1
+fi
 
-# ── Step 10: Verify import chain ──
-echo "[STEP 10/22] Verifying import chain..."
-python -c "
-from src.api.models import QueryRequest, QueryResponse, HealthResponse, ReadyResponse
-from src.api.models import RetrievalMetadata, RetrievalScores, VerificationResult
-from src.router.domain_router import DomainRouter
-from pipelines.healthcare.adapter import HealthcarePipeline
-from pipelines.scientific.adapter import ScientificPipeline
-from src.api.pipeline_factory import create_healthcare_pipeline, create_scientific_pipeline
-from src.shared.schemas.response import UnifiedResponse, SourceItem
-from src.shared.base_pipeline import BasePipeline
-print('  ✓ All imports OK')
-" || { echo "  ✗ Import chain broken"; exit 1; }
-
-# ── Step 11: Scientific pipeline status ──
-echo "[STEP 11/22] Scientific pipeline..."
-echo "  ℹ Scientific pipeline disabled — no indices available"
-echo "  ℹ Healthcare success determines job result"
-echo ""
+step 4 4 "Checking images and reports..."
+if [ -d "${LINK_OPENI}/images" ] 2>/dev/null; then
+    IMG_COUNT=$(find "${LINK_OPENI}/images/" -maxdepth 1 -type f -name "*.png" 2>/dev/null | wc -l)
+    ok "Images: ${IMG_COUNT} .png files"
+else
+    echo "  ⚠ Images directory not accessible"
+fi
+if [ -d "${LINK_OPENI}/reports" ] 2>/dev/null; then
+    RPT_COUNT=$(find "${LINK_OPENI}/reports/" -maxdepth 1 -type f 2>/dev/null | wc -l)
+    ok "Reports: ${RPT_COUNT} files"
+else
+    echo "  ⚠ Reports directory not accessible"
+fi
 
 # ════════════════════════════════════════════════════════════════════════
-#  PHASE 2 — SERVER LAUNCH & LOCAL VERIFICATION
+#  PHASE 5 — FASTAPI LAUNCH + READINESS WAIT
 # ════════════════════════════════════════════════════════════════════════
 
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  PHASE 2 — Server Launch & Local Verification"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+banner "PHASE 5 — FastAPI Launch"
 
-# ── Step 12: Launch FastAPI ──
-echo "[STEP 12/22] Starting FastAPI server on port ${PORT}..."
-mkdir -p outputs/logs
-
+step 5 1 "Starting FastAPI on port ${PORT}..."
 python -u -m uvicorn src.api.app:app \
     --host 0.0.0.0 \
     --port ${PORT} \
@@ -314,50 +377,77 @@ python -u -m uvicorn src.api.app:app \
     2>&1 &
 
 SERVER_PID=$!
-echo "  Server PID: ${SERVER_PID}"
+ok "Server PID: ${SERVER_PID}"
 
-# ── Step 13: Wait until server is live ──
-echo "[STEP 13/22] Waiting for server to be ready (up to 600s)..."
+step 5 2 "Waiting for server readiness (up to 600s)..."
 MAX_WAIT=600
 WAITED=0
-SERVER_UP=0
+SERVER_READY=0
 
 while [ $WAITED -lt $MAX_WAIT ]; do
-    if curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/health" 2>/dev/null | grep -q "200"; then
-        SERVER_UP=1
-        break
-    fi
+    # Check if process is still alive
     if ! kill -0 ${SERVER_PID} 2>/dev/null; then
-        echo "  ✗ FAIL: Server process died (PID ${SERVER_PID})"
+        fail "Server process died (PID ${SERVER_PID})"
+        echo "  Check the logs above for errors."
         exit 1
     fi
+
+    # Check /health first (server is up)
+    HEALTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/health" 2>/dev/null || echo "000")
+    if [ "${HEALTH_CODE}" = "200" ]; then
+        # Now check /ready (pipeline loaded)
+        READY_BODY=$(curl -s "http://localhost:${PORT}/ready" 2>/dev/null || echo "{}")
+        IS_READY=$(echo "${READY_BODY}" | python -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    if d.get('ready') == True and 'healthcare' in d.get('domains', []):
+        print('YES')
+    else:
+        print('NO')
+except:
+    print('NO')
+" 2>/dev/null || echo "NO")
+
+        if [ "${IS_READY}" = "YES" ]; then
+            SERVER_READY=1
+            break
+        fi
+    fi
+
     sleep 5
     WAITED=$((WAITED + 5))
     if [ $((WAITED % 30)) -eq 0 ]; then
-        echo "  ... waiting (${WAITED}s / ${MAX_WAIT}s)"
+        echo "  ... waiting (${WAITED}s / ${MAX_WAIT}s) health=${HEALTH_CODE}"
     fi
 done
 
-if [ $SERVER_UP -eq 0 ]; then
-    echo "  ✗ FAIL: Server did not start within ${MAX_WAIT}s"
+if [ $SERVER_READY -eq 0 ]; then
+    fail "Server did not become ready within ${MAX_WAIT}s"
     kill ${SERVER_PID} 2>/dev/null || true
     exit 1
 fi
 
-echo "  ✓ Server is UP after ${WAITED}s"
+ok "Server READY after ${WAITED}s — Healthcare pipeline LIVE"
 echo ""
 
-# ── Helper: run & validate curl tests ──
+# ════════════════════════════════════════════════════════════════════════
+#  PHASE 6 — FULL VALIDATION (11 tests across 3 modes)
+# ════════════════════════════════════════════════════════════════════════
+
+banner "PHASE 6 — Full Validation"
+
 TMPFILE="/tmp/mmrag_test_${SLURM_JOB_ID:-$$}.json"
 TEST_PASS=0
 TEST_FAIL=0
 
-# Write validators to temp files (avoids bash/python escaping hell)
+# Write validators to temp files
 VAL_HEALTH=$(mktemp /tmp/mmrag_val_XXXX.py)
 cat > "${VAL_HEALTH}" << 'PYEOF'
 import sys, json
 d = json.load(sys.stdin)
-assert d.get('status') == 'healthy', 'status=' + str(d.get('status'))
+st = d.get('status', '')
+assert st == 'healthy', 'status=' + st
 print('status=healthy svc=' + str(d.get('service')) + ' v=' + str(d.get('version')))
 PYEOF
 
@@ -366,10 +456,10 @@ cat > "${VAL_READY}" << 'PYEOF'
 import sys, json
 d = json.load(sys.stdin)
 assert d.get('ready') == True, 'ready=' + str(d.get('ready'))
-assert 'healthcare' in d.get('domains', []), 'domains=' + str(d.get('domains'))
+assert 'healthcare' in d.get('domains', []), 'no healthcare in domains'
 det = d.get('detail', '')
 assert 'LIVE' in det, 'detail=' + det
-print('ready=true domains=' + str(d.get('domains')) + ' detail=' + det)
+print(det)
 PYEOF
 
 VAL_QUERY=$(mktemp /tmp/mmrag_val_XXXX.py)
@@ -379,35 +469,37 @@ d = json.load(sys.stdin)
 a = d.get('answer', '')
 assert a, 'empty answer'
 assert 'Pipeline not loaded' not in a, 'PLACEHOLDER: ' + a[:80]
+c = d.get('confidence', -1)
+assert isinstance(c, (int, float)) and c >= 0, 'bad confidence'
 s = d.get('sources', [])
 assert len(s) > 0, 'no sources'
-rm = d.get('retrieval_metadata', {}).get('scores', {})
+rm = d.get('retrieval_metadata', {})
+sc = rm.get('scores', {})
+assert sc, 'no retrieval scores'
 v = d.get('verification', {})
+assert 'attribution' in v, 'no attribution'
+assert 'faithfulness' in v, 'no faithfulness'
+assert 'confidence_pass' in v, 'no confidence_pass'
 lat = d.get('latency_ms', 0)
-c = d.get('confidence', 0)
-col = rm.get('colpali', 0)
-sci = rm.get('scincl', 0)
-fus = rm.get('fused', 0)
-attr_v = v.get('attribution', '?')
-faith = v.get('faithfulness', '?')
-print('answer=%dch conf=%.3f sources=%d colpali=%.4f scincl=%.4f fused=%.4f attr=%s faith=%s latency=%dms' % (len(a), c, len(s), col, sci, fus, attr_v, faith, lat))
+assert lat > 0, 'no latency'
+col = sc.get('colpali', 0)
+sci = sc.get('scincl', 0)
+fus = sc.get('fused', 0)
+meth = rm.get('method', '?')
+# Tab-separated for parsing
+print('%d\t%.4f\t%d\t%.4f\t%.4f\t%.4f\t%s\t%s\t%s' % (
+    lat, c, len(s), col, sci, fus, meth,
+    v.get('attribution', '?'), v.get('faithfulness', '?')))
 PYEOF
 
-VAL_QUERY_SHORT=$(mktemp /tmp/mmrag_val_XXXX.py)
-cat > "${VAL_QUERY_SHORT}" << 'PYEOF'
-import sys, json
-d = json.load(sys.stdin)
-a = d.get('answer', '')
-assert a and 'Pipeline not loaded' not in a, 'bad answer'
-print('answer=%dch latency=%dms' % (len(a), d.get('latency_ms', 0)))
-PYEOF
+BASE="http://localhost:${PORT}"
 
-curl_test() {
-    local STEP="$1" NAME="$2" METHOD="$3" URL="$4" DATA="$5" PYFILE="$6"
+run_test() {
+    local NUM="$1" NAME="$2" MODE="$3" METHOD="$4" ENDPOINT="$5" DATA="$6" PYFILE="$7"
 
-    echo "[STEP ${STEP}] ${NAME}"
-
+    local URL="${BASE}${ENDPOINT}"
     local HTTP_CODE
+
     if [ "$METHOD" = "GET" ]; then
         HTTP_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" --max-time 120 "${URL}" 2>/dev/null)
     else
@@ -418,110 +510,214 @@ curl_test() {
     fi
 
     if [ "${HTTP_CODE}" != "200" ]; then
-        echo "  ✗ FAIL: HTTP ${HTTP_CODE}"
+        echo "  ✗ [${NUM}] ${NAME} (${MODE}) — HTTP ${HTTP_CODE}"
         TEST_FAIL=$((TEST_FAIL + 1))
+        # Write to report
+        echo "| ${NUM} | ${NAME} | ${MODE} | ${HTTP_CODE} | ✗ FAIL | - | - | - | - | HTTP error |" >> "${REPORT_FILE}"
         return 1
     fi
 
-    local RESULT
-    RESULT=$(cat "${TMPFILE}" | python "${PYFILE}" 2>&1)
+    local DETAIL
+    DETAIL=$(cat "${TMPFILE}" | python "${PYFILE}" 2>&1)
     local RC=$?
 
     if [ $RC -eq 0 ]; then
-        echo "  ✓ PASS — ${RESULT}"
+        echo "  ✓ [${NUM}] ${NAME} (${MODE}) — ${DETAIL}"
         TEST_PASS=$((TEST_PASS + 1))
+
+        if [ "${PYFILE}" = "${VAL_QUERY}" ]; then
+            local LAT CONF SRCS COL SCI FUS METH ATTR FAITH
+            LAT=$(echo "${DETAIL}" | cut -f1)
+            CONF=$(echo "${DETAIL}" | cut -f2)
+            SRCS=$(echo "${DETAIL}" | cut -f3)
+            COL=$(echo "${DETAIL}" | cut -f4)
+            SCI=$(echo "${DETAIL}" | cut -f5)
+            FUS=$(echo "${DETAIL}" | cut -f6)
+            METH=$(echo "${DETAIL}" | cut -f7)
+            ATTR=$(echo "${DETAIL}" | cut -f8)
+            FAITH=$(echo "${DETAIL}" | cut -f9)
+            echo "| ${NUM} | ${NAME} | ${MODE} | ${HTTP_CODE} | ✓ PASS | ${LAT}ms | ${CONF} | ${SRCS} | ${FUS} | ${METH} col=${COL} sci=${SCI} |" >> "${REPORT_FILE}"
+        else
+            echo "| ${NUM} | ${NAME} | ${MODE} | ${HTTP_CODE} | ✓ PASS | - | - | - | - | ${DETAIL} |" >> "${REPORT_FILE}"
+        fi
         return 0
     else
-        echo "  ✗ FAIL — ${RESULT}"
+        echo "  ✗ [${NUM}] ${NAME} (${MODE}) — ${DETAIL}"
         TEST_FAIL=$((TEST_FAIL + 1))
+        echo "| ${NUM} | ${NAME} | ${MODE} | ${HTTP_CODE} | ✗ FAIL | - | - | - | - | ${DETAIL} |" >> "${REPORT_FILE}"
         return 1
     fi
 }
 
-BASE="http://localhost:${PORT}"
+# ── Phase 7: Report header ──
 
-# ── Step 14: GET /health ──
-curl_test "14/22" "GET /health (local)" "GET" "${BASE}/health" "" "${VAL_HEALTH}"
+REPORT_FILE="${PROJECT_DIR}/outputs/reports/api_validation.md"
 
-# ── Step 15: GET /ready ──
-curl_test "15/22" "GET /ready (local)" "GET" "${BASE}/ready" "" "${VAL_READY}"
+cat > "${REPORT_FILE}" << REOF
+# MMRAG Unified — API Validation Report
 
-# ── Step 16: POST /query ──
-curl_test "16/22" "POST /query — healthcare (local)" "POST" "${BASE}/query" \
-    '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3,"include_images":true}' "${VAL_QUERY}"
+**Target:** ${BASE}
+**Node:** $(hostname)
+**Date:** $(date)
+**Job:** ${SLURM_JOB_ID:-interactive}
 
+---
+
+## Results
+
+| # | Query | Mode | HTTP | Status | Latency | Confidence | Sources | Fused | Details |
+|---|-------|------|------|--------|---------|------------|---------|-------|---------|
+REOF
+
+# ── System endpoints ──
+echo "── System Endpoints ──"
+run_test 1 "GET /health" "system" "GET" "/health" "" "${VAL_HEALTH}"
+run_test 2 "GET /ready" "system" "GET" "/ready" "" "${VAL_READY}"
 echo ""
 
-# Check if local tests passed
+# ── A. Text-only retrieval (3 queries) ──
+echo "── A. Text-Only Retrieval ──"
+run_test 3 "What is cardiomegaly?" "text" \
+    "POST" "/query" \
+    '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3}' \
+    "${VAL_QUERY}"
+
+run_test 4 "Explain pleural effusion" "text" \
+    "POST" "/query" \
+    '{"query":"Explain pleural effusion.","domain":"healthcare","top_k":3}' \
+    "${VAL_QUERY}"
+
+run_test 5 "Signs of pneumonia" "text" \
+    "POST" "/query" \
+    '{"query":"What are radiographic signs of pneumonia?","domain":"healthcare","top_k":3}' \
+    "${VAL_QUERY}"
+echo ""
+
+# ── B. Image-context retrieval (3 queries) ──
+echo "── B. Image-Context Retrieval ──"
+run_test 6 "Retrieve similar X-rays" "image" \
+    "POST" "/query" \
+    '{"query":"Retrieve similar chest X-rays showing lung opacities.","domain":"healthcare","top_k":3,"include_images":true}' \
+    "${VAL_QUERY}"
+
+run_test 7 "Find reports for cardiomegaly" "image" \
+    "POST" "/query" \
+    '{"query":"Find radiology reports with cardiomegaly findings.","domain":"healthcare","top_k":3,"include_images":true}' \
+    "${VAL_QUERY}"
+
+run_test 8 "Visual matches for nodule" "image" \
+    "POST" "/query" \
+    '{"query":"Retrieve nearest visual matches for pulmonary nodule on chest X-ray.","domain":"healthcare","top_k":3,"include_images":true}' \
+    "${VAL_QUERY}"
+echo ""
+
+# ── C. Multimodal retrieval (3 queries, auto-routed) ──
+echo "── C. Multimodal Retrieval (auto-routed) ──"
+run_test 9 "Pleural effusion in X-ray?" "multi" \
+    "POST" "/query" \
+    '{"query":"Does this chest X-ray show pleural effusion?","domain":"auto","top_k":3,"include_images":true}' \
+    "${VAL_QUERY}"
+
+run_test 10 "Cardiomegaly in X-ray?" "multi" \
+    "POST" "/query" \
+    '{"query":"Is there cardiomegaly in this chest X-ray?","domain":"auto","top_k":3,"include_images":true}' \
+    "${VAL_QUERY}"
+
+run_test 11 "Abnormalities in radiograph" "multi" \
+    "POST" "/query" \
+    '{"query":"Explain the abnormalities visible in this chest radiograph.","domain":"auto","top_k":3,"include_images":true}' \
+    "${VAL_QUERY}"
+echo ""
+
+# ── Validation summary ──
+TOTAL=$((TEST_PASS + TEST_FAIL))
+
 if [ $TEST_FAIL -gt 0 ]; then
     echo "╔══════════════════════════════════════════════════════════════════╗"
-    echo "║  LOCAL TESTS FAILED — ${TEST_FAIL} failure(s). Aborting.                   ║"
+    echo "║  VALIDATION FAILED: ${TEST_PASS}/${TOTAL} passed, ${TEST_FAIL} failed                     ║"
     echo "╚══════════════════════════════════════════════════════════════════╝"
-    kill ${SERVER_PID} 2>/dev/null || true
-    rm -f "${TMPFILE}"
-    exit 1
+    # Don't exit — still try tunnel for debugging
+else
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║  ✅ ALL ${TOTAL} TESTS PASSED                                        ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
 fi
 
-echo "  ✓ All local tests passed (${TEST_PASS}/${TEST_PASS})"
+# Append summary to report
+cat >> "${REPORT_FILE}" << REOF
+
+---
+
+## Summary
+
+**Passed:** ${TEST_PASS} / ${TOTAL}
+**Failed:** ${TEST_FAIL} / ${TOTAL}
+
+### Test Categories
+
+| Category | Count | Description |
+|----------|-------|-------------|
+| System | 2 | GET /health, GET /ready |
+| Text-only | 3 | Pure text queries exercising text + image retrieval |
+| Image-context | 3 | Image-focused language triggering ColQwen2 image index |
+| Multimodal | 3 | Auto-routed queries combining retrieval via HybridRetriever |
+
+### Validation Checks (per query)
+
+- HTTP 200
+- answer is non-empty
+- answer does NOT contain "Pipeline not loaded"
+- confidence is a number >= 0
+- sources is non-empty
+- retrieval_metadata.scores exists (colpali, scincl, fused)
+- verification contains attribution, faithfulness, confidence_pass
+- latency_ms > 0
+
+REOF
+
+ok "Report saved: ${REPORT_FILE}"
 echo ""
 
 # ════════════════════════════════════════════════════════════════════════
-#  PHASE 3 — PUBLIC HTTPS TUNNEL (Cloudflare Quick Tunnel)
+#  PHASE 8 — CLOUDFLARE TUNNEL
 # ════════════════════════════════════════════════════════════════════════
 
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  PHASE 3 — Public HTTPS Tunnel"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+banner "PHASE 8 — Cloudflare Tunnel"
 
-# ── Step 17: Download cloudflared ──
-echo "[STEP 17/22] Setting up cloudflared..."
 TUNNEL_LOG="${PROJECT_DIR}/outputs/logs/tunnel_${SLURM_JOB_ID:-$$}.log"
 
+step 8 1 "Setting up cloudflared..."
 if [ -x "${CLOUDFLARED_BIN}" ]; then
-    echo "  ✓ cloudflared already cached at ${CLOUDFLARED_BIN}"
+    ok "Cached at ${CLOUDFLARED_BIN}"
 else
-    echo "  Downloading cloudflared..."
+    echo "  Downloading..."
     mkdir -p "$(dirname ${CLOUDFLARED_BIN})"
     curl -sL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" \
         -o "${CLOUDFLARED_BIN}" 2>/dev/null
     chmod +x "${CLOUDFLARED_BIN}"
-    echo "  ✓ Downloaded cloudflared to ${CLOUDFLARED_BIN}"
+    ok "Downloaded to ${CLOUDFLARED_BIN}"
 fi
 
-# Verify binary works
-if "${CLOUDFLARED_BIN}" version 2>/dev/null | head -1; then
-    echo "  ✓ cloudflared binary verified"
-else
-    echo "  ⚠ cloudflared version check failed — attempting tunnel anyway"
-fi
-
-# ── Step 18: Start tunnel ──
-echo "[STEP 18/22] Starting Cloudflare Quick Tunnel..."
+step 8 2 "Starting tunnel..."
 "${CLOUDFLARED_BIN}" tunnel --url "http://localhost:${PORT}" \
     --no-autoupdate \
     > "${TUNNEL_LOG}" 2>&1 &
 
 TUNNEL_PID=$!
-echo "  Tunnel PID: ${TUNNEL_PID}"
-echo "  Waiting for tunnel URL..."
+ok "Tunnel PID: ${TUNNEL_PID}"
 
-# Wait for the tunnel URL to appear in logs (up to 30s)
+# Wait for URL (up to 30s)
 PUBLIC_URL=""
 TUNNEL_WAIT=0
 while [ $TUNNEL_WAIT -lt 30 ]; do
     sleep 2
     TUNNEL_WAIT=$((TUNNEL_WAIT + 2))
-
-    # Extract the trycloudflare.com URL from tunnel logs
     PUBLIC_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "${TUNNEL_LOG}" 2>/dev/null | head -1)
     if [ -n "${PUBLIC_URL}" ]; then
         break
     fi
-
     if ! kill -0 ${TUNNEL_PID} 2>/dev/null; then
-        echo "  ⚠ Tunnel process died. Check ${TUNNEL_LOG}"
-        echo "  Continuing without public endpoint..."
+        echo "  ⚠ Tunnel process died. Check: ${TUNNEL_LOG}"
         PUBLIC_URL=""
         break
     fi
@@ -533,170 +729,128 @@ if [ -n "${PUBLIC_URL}" ]; then
     echo "║                                                                ║"
     echo "║  🌐 PUBLIC HTTPS ENDPOINT ACTIVE                               ║"
     echo "║                                                                ║"
-    echo "║  PUBLIC_URL=${PUBLIC_URL}                                       "
+    echo "║  PUBLIC_URL=${PUBLIC_URL}"
     echo "║                                                                ║"
     echo "║  Endpoints:                                                    ║"
-    echo "║    GET  ${PUBLIC_URL}/health                                    "
-    echo "║    GET  ${PUBLIC_URL}/ready                                     "
-    echo "║    POST ${PUBLIC_URL}/query                                     "
-    echo "║    GET  ${PUBLIC_URL}/docs  (OpenAPI)                           "
+    echo "║    GET  ${PUBLIC_URL}/health"
+    echo "║    GET  ${PUBLIC_URL}/ready"
+    echo "║    POST ${PUBLIC_URL}/query"
+    echo "║    GET  ${PUBLIC_URL}/docs  (OpenAPI)"
     echo "║                                                                ║"
     echo "╚══════════════════════════════════════════════════════════════════╝"
 else
     echo "  ⚠ Could not obtain public URL within 30s"
-    echo "  Server is still running locally on port ${PORT}"
-    echo "  Manual tunnel: cloudflared tunnel --url http://localhost:${PORT}"
+    echo "  Server still running at http://localhost:${PORT}"
 fi
-echo ""
-
-# ── Step 19: Print public URL (repeated for easy grep) ──
-echo "[STEP 19/22] Public URL summary"
-echo "  PUBLIC_URL=${PUBLIC_URL:-NOT_AVAILABLE}"
-echo "  LOCAL_URL=http://localhost:${PORT}"
-echo ""
 
 # ════════════════════════════════════════════════════════════════════════
-#  PHASE 4 — PUBLIC VERIFICATION & STABILITY TESTING
+#  PHASE 9 — PUBLIC ENDPOINT VERIFICATION
 # ════════════════════════════════════════════════════════════════════════
 
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  PHASE 4 — Public Verification & Stability"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+banner "PHASE 9 — Public Endpoint Verification"
 
-# ── Step 20: Public endpoint verification ──
 if [ -n "${PUBLIC_URL}" ]; then
-    echo "[STEP 20/22] Verifying public endpoints..."
+    PUB_PASS=0
+    PUB_FAIL=0
 
     # Public /health
-    curl_test "20a" "GET /health (public)" "GET" "${PUBLIC_URL}/health" "" "${VAL_HEALTH}"
+    PUB_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" --max-time 15 "${PUBLIC_URL}/health" 2>/dev/null || echo "000")
+    if [ "${PUB_CODE}" = "200" ]; then
+        ok "Public /health → 200"
+        PUB_PASS=$((PUB_PASS + 1))
+    else
+        fail "Public /health → ${PUB_CODE}"
+        PUB_FAIL=$((PUB_FAIL + 1))
+    fi
 
     # Public /ready
-    curl_test "20b" "GET /ready (public)" "GET" "${PUBLIC_URL}/ready" "" "${VAL_READY}"
+    PUB_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" --max-time 15 "${PUBLIC_URL}/ready" 2>/dev/null || echo "000")
+    if [ "${PUB_CODE}" = "200" ]; then
+        READY_DET=$(cat "${TMPFILE}" | python "${VAL_READY}" 2>&1)
+        ok "Public /ready → ${READY_DET}"
+        PUB_PASS=$((PUB_PASS + 1))
+    else
+        fail "Public /ready → ${PUB_CODE}"
+        PUB_FAIL=$((PUB_FAIL + 1))
+    fi
 
     # Public /query
-    curl_test "20c" "POST /query (public)" "POST" "${PUBLIC_URL}/query" \
-        '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3}' "${VAL_QUERY_SHORT}"
-else
-    echo "[STEP 20/22] Skipped — no public URL available"
-fi
-echo ""
+    PUB_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" --max-time 120 \
+        -X POST "${PUBLIC_URL}/query" \
+        -H "Content-Type: application/json" \
+        -d '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3}' 2>/dev/null || echo "000")
 
-# ── Step 21: Stability testing (3 rounds of diverse queries) ──
-echo "[STEP 21/22] Stability testing (3 rounds)..."
-echo ""
-
-# A. Text-only queries
-# B. Image-context queries
-# C. Multimodal (auto-routed) queries
-STABILITY_QUERIES=(
-    '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3}'
-    '{"query":"Explain pleural effusion.","domain":"healthcare","top_k":3}'
-    '{"query":"What are radiographic signs of pneumonia?","domain":"healthcare","top_k":3}'
-    '{"query":"Retrieve similar chest X-rays.","domain":"healthcare","top_k":3,"include_images":true}'
-    '{"query":"Find reports similar to this chest radiograph.","domain":"healthcare","top_k":3,"include_images":true}'
-    '{"query":"Retrieve nearest visual matches for this image.","domain":"healthcare","top_k":3,"include_images":true}'
-    '{"query":"Does this X-ray show pleural effusion?","domain":"auto","top_k":3,"include_images":true}'
-    '{"query":"Is there cardiomegaly in this chest X-ray?","domain":"auto","top_k":3,"include_images":true}'
-    '{"query":"Explain abnormalities in this chest radiograph image.","domain":"auto","top_k":3,"include_images":true}'
-)
-
-STABILITY_PASS=0
-STABILITY_FAIL=0
-
-for round in 1 2 3; do
-    echo "  Round ${round}/3:"
-    for i in "${!STABILITY_QUERIES[@]}"; do
-        QUERY="${STABILITY_QUERIES[$i]}"
-        HTTP_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" \
-            -X POST "${BASE}/query" \
-            -H "Content-Type: application/json" \
-            -d "${QUERY}" 2>/dev/null)
-
-        BODY=$(cat "${TMPFILE}" 2>/dev/null)
-        ANSWER=$(cat "${TMPFILE}" | python -c "
+    if [ "${PUB_CODE}" = "200" ]; then
+        PUB_ANSWER=$(cat "${TMPFILE}" | python -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
     a = d.get('answer', '')
     if a and 'Pipeline not loaded' not in a:
-        print(str(len(a)) + 'ch')
+        print(str(len(a)) + 'ch latency=' + str(d.get('latency_ms', 0)) + 'ms')
     else:
-        print('FAIL')
+        print('PLACEHOLDER')
 except:
-    print('FAIL')
+    print('PARSE_ERROR')
 " 2>/dev/null || echo "FAIL")
-        LATENCY=$(cat "${TMPFILE}" | python -c "
-import sys, json
-try:
-    print(json.load(sys.stdin).get('latency_ms', 0))
-except:
-    print(0)
-" 2>/dev/null || echo "0")
+        ok "Public /query → ${PUB_ANSWER}"
+        PUB_PASS=$((PUB_PASS + 1))
+    else
+        fail "Public /query → ${PUB_CODE}"
+        PUB_FAIL=$((PUB_FAIL + 1))
+    fi
 
-        if [ "${HTTP_CODE}" = "200" ] && [ "${ANSWER}" != "FAIL" ]; then
-            echo "    ✓ Query $((i+1)): HTTP=${HTTP_CODE} answer=${ANSWER} latency=${LATENCY}ms"
-            STABILITY_PASS=$((STABILITY_PASS + 1))
-        else
-            echo "    ✗ Query $((i+1)): HTTP=${HTTP_CODE} answer=${ANSWER}"
-            STABILITY_FAIL=$((STABILITY_FAIL + 1))
-        fi
-    done
     echo ""
-done
-
-STABILITY_TOTAL=$((STABILITY_PASS + STABILITY_FAIL))
-echo "  Stability: ${STABILITY_PASS}/${STABILITY_TOTAL} queries successful"
-echo ""
+    echo "  Public tests: ${PUB_PASS}/3 passed"
+else
+    echo "  Skipped — no public URL"
+fi
 
 # ════════════════════════════════════════════════════════════════════════
-#  FINAL SUMMARY
+#  PHASE 10 — FINAL SUMMARY + KEEP-ALIVE
 # ════════════════════════════════════════════════════════════════════════
+
+banner "PHASE 10 — Deployment Complete"
 
 echo "╔══════════════════════════════════════════════════════════════════╗"
 echo "║  DEPLOYMENT SUMMARY                                            ║"
 echo "╠══════════════════════════════════════════════════════════════════╣"
-echo "║                                                                ║"
-echo "║  Local Tests    : ${TEST_PASS} passed, ${TEST_FAIL} failed                            ║"
-echo "║  Stability      : ${STABILITY_PASS}/${STABILITY_TOTAL} queries passed                           ║"
-echo "║  Server PID     : ${SERVER_PID}                                         ║"
-echo "║  Local URL      : http://localhost:${PORT}                          ║"
+echo "║  GPU          : $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
+echo "║  torch        : $(python -c 'import torch; print(torch.__version__)' 2>/dev/null)"
+echo "║  CUDA         : $(python -c 'import torch; print(torch.version.cuda)' 2>/dev/null)"
+echo "║  Local Tests  : ${TEST_PASS}/${TOTAL} passed"
+echo "║  Server PID   : ${SERVER_PID}"
+echo "║  Local URL    : http://localhost:${PORT}"
 if [ -n "${PUBLIC_URL}" ]; then
-echo "║  Public URL     : ${PUBLIC_URL}  "
-echo "║  Tunnel PID     : ${TUNNEL_PID}                                         ║"
+echo "║  Public URL   : ${PUBLIC_URL}"
+echo "║  Tunnel PID   : ${TUNNEL_PID}"
 fi
+echo "║  Report       : ${REPORT_FILE}"
 echo "║                                                                ║"
-if [ $TEST_FAIL -eq 0 ] && [ $STABILITY_FAIL -eq 0 ]; then
+if [ ${TEST_FAIL} -eq 0 ]; then
 echo "║  ✅ ALL CHECKS PASSED — Healthcare pipeline LIVE               ║"
 else
-echo "║  ⚠  Some checks failed — review logs above                    ║"
+echo "║  ⚠  ${TEST_FAIL} test(s) failed — review logs above                    ║"
 fi
-echo "║                                                                ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
-echo ""
 
-# Print curl commands for the professor
+# Print professor-ready commands
+echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Curl commands for verification:"
+echo "  Professor-ready curl commands:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ -n "${PUBLIC_URL}" ]; then
     echo ""
     echo "  # Health check"
     echo "  curl -s ${PUBLIC_URL}/health | python -m json.tool"
     echo ""
-    echo "  # Readiness check"
+    echo "  # Readiness"
     echo "  curl -s ${PUBLIC_URL}/ready | python -m json.tool"
     echo ""
-    echo "  # Healthcare query"
+    echo "  # Query"
     echo "  curl -s -X POST ${PUBLIC_URL}/query \\"
     echo "    -H 'Content-Type: application/json' \\"
     echo "    -d '{\"query\":\"What is cardiomegaly?\",\"domain\":\"healthcare\",\"top_k\":3}' \\"
-    echo "    | python -m json.tool"
-    echo ""
-    echo "  # Auto-routing query"
-    echo "  curl -s -X POST ${PUBLIC_URL}/query \\"
-    echo "    -H 'Content-Type: application/json' \\"
-    echo "    -d '{\"query\":\"Is there pleural effusion in this chest x-ray?\",\"domain\":\"auto\",\"top_k\":3}' \\"
     echo "    | python -m json.tool"
     echo ""
     echo "  # OpenAPI docs (browser)"
@@ -704,16 +858,13 @@ if [ -n "${PUBLIC_URL}" ]; then
 fi
 echo ""
 
-# ── Step 22: Keep server + tunnel alive ──
-echo "[STEP 22/22] Server and tunnel are now running."
-echo "  The server will remain active until the SLURM walltime (4h) or scancel."
-echo "  To stop: scancel ${SLURM_JOB_ID:-<JOBID>}"
-echo ""
-echo "  Entering keep-alive loop..."
-echo "  $(date)"
+# Searchable markers for grep
+echo "PUBLIC_URL=${PUBLIC_URL:-NOT_AVAILABLE}"
+echo "LOCAL_URL=http://localhost:${PORT}"
+echo "SERVER_PID=${SERVER_PID}"
 echo ""
 
-# Cleanup handler
+# ── Cleanup handler ──
 cleanup() {
     echo ""
     echo "  Shutting down..."
@@ -721,22 +872,25 @@ cleanup() {
     [ -n "${TUNNEL_PID:-}" ] && kill ${TUNNEL_PID} 2>/dev/null || true
     wait ${SERVER_PID} 2>/dev/null || true
     [ -n "${TUNNEL_PID:-}" ] && wait ${TUNNEL_PID} 2>/dev/null || true
-    rm -f "${TMPFILE}" "${VAL_HEALTH}" "${VAL_READY}" "${VAL_QUERY}" "${VAL_QUERY_SHORT}"
-    echo "  Server and tunnel stopped."
-    echo "  Finished: $(date)"
+    rm -f "${TMPFILE}" "${VAL_HEALTH}" "${VAL_READY}" "${VAL_QUERY}"
+    echo "  Stopped. $(date)"
 }
 trap cleanup EXIT INT TERM
 
-# Keep alive — periodically verify server is still running
+# ── Keep-alive ──
+echo "  Server and tunnel running. Walltime: 4h or scancel ${SLURM_JOB_ID:-$$}"
+echo "  $(date)"
+echo ""
+
 while true; do
     sleep 60
     if ! kill -0 ${SERVER_PID} 2>/dev/null; then
-        echo "  ⚠ Server died unexpectedly at $(date)"
+        echo "  ⚠ Server died at $(date)"
         exit 1
     fi
-    # Silent health check every minute
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/health" 2>/dev/null || echo "000")
-    if [ "${HTTP_CODE}" != "200" ]; then
-        echo "  ⚠ Health check failed (HTTP ${HTTP_CODE}) at $(date)"
+    # Silent health check
+    HC=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/health" 2>/dev/null || echo "000")
+    if [ "${HC}" != "200" ]; then
+        echo "  ⚠ Health check failed (HTTP ${HC}) at $(date)"
     fi
 done

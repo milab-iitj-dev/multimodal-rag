@@ -352,36 +352,79 @@ TMPFILE="/tmp/mmrag_test_${SLURM_JOB_ID:-$$}.json"
 TEST_PASS=0
 TEST_FAIL=0
 
+# Write validators to temp files (avoids bash/python escaping hell)
+VAL_HEALTH=$(mktemp /tmp/mmrag_val_XXXX.py)
+cat > "${VAL_HEALTH}" << 'PYEOF'
+import sys, json
+d = json.load(sys.stdin)
+assert d.get('status') == 'healthy', 'status=' + str(d.get('status'))
+print('status=healthy svc=' + str(d.get('service')) + ' v=' + str(d.get('version')))
+PYEOF
+
+VAL_READY=$(mktemp /tmp/mmrag_val_XXXX.py)
+cat > "${VAL_READY}" << 'PYEOF'
+import sys, json
+d = json.load(sys.stdin)
+assert d.get('ready') == True, 'ready=' + str(d.get('ready'))
+assert 'healthcare' in d.get('domains', []), 'domains=' + str(d.get('domains'))
+det = d.get('detail', '')
+assert 'LIVE' in det, 'detail=' + det
+print('ready=true domains=' + str(d.get('domains')) + ' detail=' + det)
+PYEOF
+
+VAL_QUERY=$(mktemp /tmp/mmrag_val_XXXX.py)
+cat > "${VAL_QUERY}" << 'PYEOF'
+import sys, json
+d = json.load(sys.stdin)
+a = d.get('answer', '')
+assert a, 'empty answer'
+assert 'Pipeline not loaded' not in a, 'PLACEHOLDER: ' + a[:80]
+s = d.get('sources', [])
+assert len(s) > 0, 'no sources'
+rm = d.get('retrieval_metadata', {}).get('scores', {})
+v = d.get('verification', {})
+lat = d.get('latency_ms', 0)
+c = d.get('confidence', 0)
+col = rm.get('colpali', 0)
+sci = rm.get('scincl', 0)
+fus = rm.get('fused', 0)
+attr_v = v.get('attribution', '?')
+faith = v.get('faithfulness', '?')
+print('answer=%dch conf=%.3f sources=%d colpali=%.4f scincl=%.4f fused=%.4f attr=%s faith=%s latency=%dms' % (len(a), c, len(s), col, sci, fus, attr_v, faith, lat))
+PYEOF
+
+VAL_QUERY_SHORT=$(mktemp /tmp/mmrag_val_XXXX.py)
+cat > "${VAL_QUERY_SHORT}" << 'PYEOF'
+import sys, json
+d = json.load(sys.stdin)
+a = d.get('answer', '')
+assert a and 'Pipeline not loaded' not in a, 'bad answer'
+print('answer=%dch latency=%dms' % (len(a), d.get('latency_ms', 0)))
+PYEOF
+
 curl_test() {
-    local STEP="$1" NAME="$2" METHOD="$3" URL="$4" DATA="$5"
-    shift 5
-    # remaining args are python validation lines
+    local STEP="$1" NAME="$2" METHOD="$3" URL="$4" DATA="$5" PYFILE="$6"
 
     echo "[STEP ${STEP}] ${NAME}"
 
     local HTTP_CODE
     if [ "$METHOD" = "GET" ]; then
-        HTTP_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" "${URL}" 2>/dev/null)
+        HTTP_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" --max-time 120 "${URL}" 2>/dev/null)
     else
-        HTTP_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" \
+        HTTP_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" --max-time 120 \
             -X POST "${URL}" \
             -H "Content-Type: application/json" \
             -d "${DATA}" 2>/dev/null)
     fi
 
-    local BODY
-    BODY=$(cat "${TMPFILE}" 2>/dev/null || echo "NO RESPONSE")
-
     if [ "${HTTP_CODE}" != "200" ]; then
         echo "  ✗ FAIL: HTTP ${HTTP_CODE}"
-        echo "  Body: $(echo ${BODY} | head -c 500)"
         TEST_FAIL=$((TEST_FAIL + 1))
         return 1
     fi
 
-    # Run inline Python validation
     local RESULT
-    RESULT=$(echo "${BODY}" | python -c "$@" 2>&1)
+    RESULT=$(cat "${TMPFILE}" | python "${PYFILE}" 2>&1)
     local RC=$?
 
     if [ $RC -eq 0 ]; then
@@ -390,7 +433,6 @@ curl_test() {
         return 0
     else
         echo "  ✗ FAIL — ${RESULT}"
-        echo "  Body: $(echo ${BODY} | head -c 500)"
         TEST_FAIL=$((TEST_FAIL + 1))
         return 1
     fi
@@ -399,41 +441,14 @@ curl_test() {
 BASE="http://localhost:${PORT}"
 
 # ── Step 14: GET /health ──
-curl_test "14/22" "GET /health (local)" "GET" "${BASE}/health" "" "
-import sys, json
-d = json.load(sys.stdin)
-assert d.get('status') == 'healthy', f'status={d.get(\"status\")}'
-print(f'status=healthy, service={d.get(\"service\")}, version={d.get(\"version\")}')
-"
+curl_test "14/22" "GET /health (local)" "GET" "${BASE}/health" "" "${VAL_HEALTH}"
 
 # ── Step 15: GET /ready ──
-curl_test "15/22" "GET /ready (local)" "GET" "${BASE}/ready" "" "
-import sys, json
-d = json.load(sys.stdin)
-assert d.get('ready') == True, f'ready={d.get(\"ready\")}'
-assert 'healthcare' in d.get('domains', []), f'domains={d.get(\"domains\")}'
-assert 'LIVE' in d.get('detail', ''), f'detail missing LIVE: {d.get(\"detail\")}'
-print(f'ready=true, domains={d[\"domains\"]}, detail=\"{d[\"detail\"]}\"')
-"
+curl_test "15/22" "GET /ready (local)" "GET" "${BASE}/ready" "" "${VAL_READY}"
 
 # ── Step 16: POST /query ──
 curl_test "16/22" "POST /query — healthcare (local)" "POST" "${BASE}/query" \
-    '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3,"include_images":true}' "
-import sys, json
-d = json.load(sys.stdin)
-a = d.get('answer','')
-assert a, 'empty answer'
-assert 'Pipeline not loaded' not in a, f'PLACEHOLDER: {a[:80]}'
-s = d.get('sources', [])
-assert len(s) > 0, 'no sources'
-rm = d.get('retrieval_metadata',{}).get('scores',{})
-v = d.get('verification',{})
-lat = d.get('latency_ms', 0)
-print(f'answer={len(a)}ch conf={d.get(\"confidence\",0):.3f} sources={len(s)} '
-      f'colpali={rm.get(\"colpali\",0):.4f} scincl={rm.get(\"scincl\",0):.4f} '
-      f'fused={rm.get(\"fused\",0):.4f} attr={v.get(\"attribution\")} '
-      f'faith={v.get(\"faithfulness\")} latency={lat}ms')
-"
+    '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3,"include_images":true}' "${VAL_QUERY}"
 
 echo ""
 
@@ -554,31 +569,14 @@ if [ -n "${PUBLIC_URL}" ]; then
     echo "[STEP 20/22] Verifying public endpoints..."
 
     # Public /health
-    curl_test "20a" "GET /health (public)" "GET" "${PUBLIC_URL}/health" "" "
-import sys, json
-d = json.load(sys.stdin)
-assert d.get('status') == 'healthy'
-print('public /health OK')
-"
+    curl_test "20a" "GET /health (public)" "GET" "${PUBLIC_URL}/health" "" "${VAL_HEALTH}"
 
     # Public /ready
-    curl_test "20b" "GET /ready (public)" "GET" "${PUBLIC_URL}/ready" "" "
-import sys, json
-d = json.load(sys.stdin)
-assert d.get('ready') == True
-assert 'healthcare' in d.get('domains', [])
-print(f'public /ready OK — {d.get(\"detail\")}')
-"
+    curl_test "20b" "GET /ready (public)" "GET" "${PUBLIC_URL}/ready" "" "${VAL_READY}"
 
     # Public /query
     curl_test "20c" "POST /query (public)" "POST" "${PUBLIC_URL}/query" \
-        '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3}' "
-import sys, json
-d = json.load(sys.stdin)
-a = d.get('answer','')
-assert a and 'Pipeline not loaded' not in a
-print(f'public /query OK — answer={len(a)}ch latency={d.get(\"latency_ms\",0)}ms')
-"
+        '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3}' "${VAL_QUERY_SHORT}"
 else
     echo "[STEP 20/22] Skipped — no public URL available"
 fi
@@ -616,8 +614,25 @@ for round in 1 2 3; do
             -d "${QUERY}" 2>/dev/null)
 
         BODY=$(cat "${TMPFILE}" 2>/dev/null)
-        ANSWER=$(echo "${BODY}" | python -c "import sys,json; d=json.load(sys.stdin); a=d.get('answer',''); print(f'{len(a)}ch' if a and 'Pipeline not loaded' not in a else 'FAIL')" 2>/dev/null || echo "FAIL")
-        LATENCY=$(echo "${BODY}" | python -c "import sys,json; print(json.load(sys.stdin).get('latency_ms',0))" 2>/dev/null || echo "0")
+        ANSWER=$(cat "${TMPFILE}" | python -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    a = d.get('answer', '')
+    if a and 'Pipeline not loaded' not in a:
+        print(str(len(a)) + 'ch')
+    else:
+        print('FAIL')
+except:
+    print('FAIL')
+" 2>/dev/null || echo "FAIL")
+        LATENCY=$(cat "${TMPFILE}" | python -c "
+import sys, json
+try:
+    print(json.load(sys.stdin).get('latency_ms', 0))
+except:
+    print(0)
+" 2>/dev/null || echo "0")
 
         if [ "${HTTP_CODE}" = "200" ] && [ "${ANSWER}" != "FAIL" ]; then
             echo "    ✓ Query $((i+1)): HTTP=${HTTP_CODE} answer=${ANSWER} latency=${LATENCY}ms"
@@ -706,7 +721,7 @@ cleanup() {
     [ -n "${TUNNEL_PID:-}" ] && kill ${TUNNEL_PID} 2>/dev/null || true
     wait ${SERVER_PID} 2>/dev/null || true
     [ -n "${TUNNEL_PID:-}" ] && wait ${TUNNEL_PID} 2>/dev/null || true
-    rm -f "${TMPFILE}"
+    rm -f "${TMPFILE}" "${VAL_HEALTH}" "${VAL_READY}" "${VAL_QUERY}" "${VAL_QUERY_SHORT}"
     echo "  Server and tunnel stopped."
     echo "  Finished: $(date)"
 }

@@ -247,6 +247,18 @@ cd "${PROJECT_DIR}"
 echo "  ✓ Python: $(which python) ($(python --version 2>&1))"
 echo "  ✓ CWD: $(pwd)"
 
+# ── Step 8.5: Verify torch is cu124 (not cu130) ──
+echo "[STEP 8.5] Verifying torch CUDA build..."
+TORCH_CUDA=$(python -c "import torch; print(torch.version.cuda)" 2>/dev/null || echo "unknown")
+if echo "${TORCH_CUDA}" | grep -qE '^12\.[0-4]'; then
+    echo "  ✓ torch CUDA ${TORCH_CUDA} — compatible with driver"
+else
+    echo "  ✗ torch CUDA ${TORCH_CUDA} — INCOMPATIBLE with driver (need cu124)"
+    echo "  Fix: pip uninstall -y torch torchvision torchaudio"
+    echo "       pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124"
+    exit 1
+fi
+
 # ── Step 9: Verify CUDA from Python ──
 echo "[STEP  9/22] Verifying CUDA..."
 python -c "
@@ -576,13 +588,19 @@ echo ""
 echo "[STEP 21/22] Stability testing (3 rounds)..."
 echo ""
 
+# A. Text-only queries
+# B. Image-context queries
+# C. Multimodal (auto-routed) queries
 STABILITY_QUERIES=(
     '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3}'
-    '{"query":"Is there pleural effusion in this chest x-ray?","domain":"auto","top_k":3}'
-    '{"query":"Describe the cardiac silhouette","domain":"healthcare","top_k":3}'
-    '{"query":"Are there signs of pneumonia?","domain":"auto","top_k":3}'
-    '{"query":"What does the lung field show?","domain":"healthcare","top_k":3}'
-    '{"query":"Is there evidence of atelectasis?","domain":"auto","top_k":3}'
+    '{"query":"Explain pleural effusion.","domain":"healthcare","top_k":3}'
+    '{"query":"What are radiographic signs of pneumonia?","domain":"healthcare","top_k":3}'
+    '{"query":"Retrieve similar chest X-rays.","domain":"healthcare","top_k":3,"include_images":true}'
+    '{"query":"Find reports similar to this chest radiograph.","domain":"healthcare","top_k":3,"include_images":true}'
+    '{"query":"Retrieve nearest visual matches for this image.","domain":"healthcare","top_k":3,"include_images":true}'
+    '{"query":"Does this X-ray show pleural effusion?","domain":"auto","top_k":3,"include_images":true}'
+    '{"query":"Is there cardiomegaly in this chest X-ray?","domain":"auto","top_k":3,"include_images":true}'
+    '{"query":"Explain abnormalities in this chest radiograph image.","domain":"auto","top_k":3,"include_images":true}'
 )
 
 STABILITY_PASS=0

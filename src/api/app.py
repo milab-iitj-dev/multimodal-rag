@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import time
 import logging
+import asyncio
 from typing import Optional
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,6 +39,108 @@ from src.api.models import (
 )
 
 logger = logging.getLogger("mmrag.api")
+
+
+# ── Global router (singleton) ──────────────────────────────
+
+_router = None
+_router_init_error = None
+
+
+def _get_router():
+    """Initialize the DomainRouter with real pipeline adapters.
+
+    Uses PipelineFactory to load actual RAGVQAPipeline / OnlinePipeline
+    when GPU and indices are available. Falls back to placeholder mode
+    (inner_pipeline=None) when resources are unavailable.
+
+    Called once at startup (via lifespan) or on first request (fallback).
+    """
+    global _router, _router_init_error
+    if _router is not None:
+        return _router
+
+    from src.router.domain_router import DomainRouter
+    from pipelines.healthcare.adapter import HealthcarePipeline
+    from pipelines.scientific.adapter import ScientificPipeline
+    from src.api.pipeline_factory import (
+        create_healthcare_pipeline,
+        create_scientific_pipeline,
+    )
+
+    # Attempt to load real pipelines (returns None if unavailable)
+    logger.info("Initializing pipelines via PipelineFactory...")
+    health_inner = create_healthcare_pipeline()
+    sci_inner = create_scientific_pipeline()
+
+    _router = DomainRouter()
+    _router.register("healthcare", HealthcarePipeline(inner_pipeline=health_inner))
+    _router.register("scientific", ScientificPipeline(inner_pipeline=sci_inner))
+
+    # ── Diagnostic logging ──
+    status_h = "LIVE" if health_inner else "placeholder"
+    status_s = "LIVE" if sci_inner else "placeholder"
+    logger.info(
+        f"DomainRouter initialized: "
+        f"healthcare={status_h}, scientific={status_s}"
+    )
+    logger.info(f"  Router id:     {id(_router)}")
+
+    for name, pipe in _router._pipelines.items():
+        inner = getattr(pipe, 'inner', None)
+        logger.info(
+            f"  Pipeline '{name}': "
+            f"adapter={type(pipe).__name__} id={id(pipe)}, "
+            f"inner={type(inner).__name__ if inner else 'None'} "
+            f"id={id(inner) if inner else 'N/A'}"
+        )
+
+    if not health_inner and not sci_inner:
+        _router_init_error = "Both pipelines in placeholder mode"
+        logger.warning(
+            "WARNING: No live pipelines — all queries will return placeholders"
+        )
+
+    return _router
+
+
+# ── Lifespan: eager startup ────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Eagerly initialize DomainRouter at startup.
+
+    Runs heavy model loading in a thread pool so it doesn't
+    block the async event loop. This ensures:
+      - Models load BEFORE any requests arrive
+      - /health returns 200 while models load (separate endpoint)
+      - /ready accurately reflects load state
+      - SLURM readiness polling works correctly
+    """
+    logger.info("=" * 60)
+    logger.info("STARTUP: Initializing DomainRouter (eager)...")
+    logger.info("=" * 60)
+
+    t0 = time.monotonic()
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, _get_router)
+        elapsed = time.monotonic() - t0
+        logger.info(f"STARTUP: DomainRouter ready in {elapsed:.1f}s")
+    except Exception as e:
+        elapsed = time.monotonic() - t0
+        logger.error(
+            f"STARTUP: DomainRouter init FAILED after {elapsed:.1f}s: {e}",
+            exc_info=True,
+        )
+
+    logger.info("=" * 60)
+    logger.info("STARTUP COMPLETE — Server accepting requests")
+    logger.info("=" * 60)
+
+    yield
+
+    logger.info("SHUTDOWN: Cleaning up...")
 
 
 # ── FastAPI app ─────────────────────────────────────────────
@@ -58,6 +162,7 @@ app = FastAPI(
     version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS — allow all origins for development
@@ -68,48 +173,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# ── Global router (lazy init) ──────────────────────────────
-
-_router = None
-
-
-def _get_router():
-    """Lazy-initialize the DomainRouter with real pipeline adapters.
-
-    Uses PipelineFactory to load actual RAGVQAPipeline / OnlinePipeline
-    when GPU and indices are available. Falls back to placeholder mode
-    (inner_pipeline=None) when resources are unavailable.
-    """
-    global _router
-    if _router is not None:
-        return _router
-
-    from src.router.domain_router import DomainRouter
-    from pipelines.healthcare.adapter import HealthcarePipeline
-    from pipelines.scientific.adapter import ScientificPipeline
-    from src.api.pipeline_factory import (
-        create_healthcare_pipeline,
-        create_scientific_pipeline,
-    )
-
-    # Attempt to load real pipelines (returns None if unavailable)
-    logger.info("Initializing pipelines via PipelineFactory...")
-    health_inner = create_healthcare_pipeline()
-    sci_inner = create_scientific_pipeline()
-
-    _router = DomainRouter()
-    _router.register("healthcare", HealthcarePipeline(inner_pipeline=health_inner))
-    _router.register("scientific", ScientificPipeline(inner_pipeline=sci_inner))
-
-    status_h = "LIVE" if health_inner else "placeholder"
-    status_s = "LIVE" if sci_inner else "placeholder"
-    logger.info(
-        f"DomainRouter initialized: "
-        f"healthcare={status_h}, scientific={status_s}"
-    )
-    return _router
 
 
 # ── Response mapping helpers ────────────────────────────────
@@ -254,10 +317,20 @@ async def readiness_check():
     try:
         router = _get_router()
 
+        # Diagnostic: log router identity on every /ready call
+        logger.debug(f"/ready: router id={id(router)}")
+
         # Check which pipelines have real inner_pipeline loaded
         live_domains = []
         for name, pipe in router._pipelines.items():
-            if hasattr(pipe, 'inner') and pipe.inner is not None:
+            inner = getattr(pipe, 'inner', None)
+            is_live = inner is not None
+            logger.debug(
+                f"/ready: {name} → "
+                f"{type(pipe).__name__} id={id(pipe)}, "
+                f"inner={'LIVE' if is_live else 'None'}"
+            )
+            if is_live:
                 live_domains.append(name)
 
         if live_domains:
@@ -279,6 +352,7 @@ async def readiness_check():
             detail=detail,
         )
     except Exception as e:
+        logger.error(f"/ready failed: {e}", exc_info=True)
         return ReadyResponse(
             ready=False,
             domains=[],
@@ -307,6 +381,9 @@ async def run_query(request: QueryRequest):
     4. Return with timing information
     """
     router = _get_router()
+
+    # Diagnostic: log router identity
+    logger.debug(f"/query: router id={id(router)}, query='{request.query[:80]}'")
 
     # Load image if needed
     image = None

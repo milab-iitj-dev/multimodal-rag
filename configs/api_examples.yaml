@@ -1,0 +1,84 @@
+# ════════════════════════════════════════════════════════════════════════
+# API Example Query Configuration
+# ════════════════════════════════════════════════════════════════════════
+#
+# Used by: python tools/generate_api_examples.py
+#
+# Defines all example queries for generating production API artifacts.
+# Each query is run against the LIVE FastAPI server and validated.
+# ════════════════════════════════════════════════════════════════════════
+
+server:
+  host: "http://localhost"
+  port: 8847
+  timeout_seconds: 180
+
+output:
+  directory: "outputs/api_examples"
+
+# Dataset image directory for image/hybrid queries.
+# Images are auto-discovered at runtime.
+dataset:
+  image_dir: "data/openi/images"
+  image_pattern: "*.dcm.png"
+  max_images: 3
+
+# ── Query definitions ──────────────────────────────────────────────────
+
+queries:
+  # ── A. Text-only retrieval ──
+  # No image_path. Tests text embedding → ColQwen2 text index → retrieval.
+  text:
+    - id: "text_01"
+      query: "What is cardiomegaly?"
+      domain: "healthcare"
+      top_k: 3
+      description: "Basic cardiology question — tests text-only retrieval path"
+
+    - id: "text_02"
+      query: "Explain pleural effusion."
+      domain: "healthcare"
+      top_k: 3
+      description: "Common radiology finding — tests evidence aggregation"
+
+    - id: "text_03"
+      query: "What are radiographic signs of pneumonia?"
+      domain: "healthcare"
+      top_k: 3
+      description: "Diagnostic imaging question — tests multi-term retrieval"
+
+  # ── B. Image retrieval ──
+  # Uses real dataset images. Tests ColQwen2 image encoding →
+  # image index → visual similarity retrieval.
+  image:
+    - id: "image_01"
+      query: "Retrieve visually similar chest X-rays."
+      domain: "healthcare"
+      top_k: 3
+      description: "Image-only visual similarity retrieval"
+      # image_path is auto-populated from dataset at runtime
+
+    - id: "image_02"
+      query: "Retrieve similar pulmonary nodule cases."
+      domain: "healthcare"
+      top_k: 3
+      description: "Image-based retrieval for specific pathology"
+
+  # ── C. Hybrid retrieval (image + text) ──
+  # Uses real dataset images + text query. Tests dual-index retrieval:
+  # ColQwen2 image encoding → image index
+  # Text query → text index
+  # → RRF fusion → question-aware reranking
+  # → Qwen2-VL generation with query image + retrieved context
+  hybrid:
+    - id: "hybrid_01"
+      query: "Does this chest X-ray show cardiomegaly?"
+      domain: "healthcare"
+      top_k: 3
+      description: "Binary clinical question with image — tests full dual-index + RRF + VLM"
+
+    - id: "hybrid_02"
+      query: "Is pleural effusion visible in this chest X-ray?"
+      domain: "healthcare"
+      top_k: 3
+      description: "Binary clinical question with image — tests image-aware generation"

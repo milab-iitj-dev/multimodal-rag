@@ -56,6 +56,17 @@ class QueryRequest(BaseModel):
         default=True,
         description="Whether to include image data in the response.",
     )
+    image_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path to a query image (e.g., chest X-ray) for true multimodal "
+            "retrieval. The image is encoded by ColQwen2, participates in "
+            "visual similarity retrieval via the dual-index, and is used "
+            "by Qwen2-VL for grounded answer generation. "
+            "Path can be relative to the project root or absolute."
+        ),
+        examples=["data/openi/images/1_IM-0001-4001.dcm.png"],
+    )
 
 
 # ── Response components ─────────────────────────────────────

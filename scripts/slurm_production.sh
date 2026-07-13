@@ -79,9 +79,7 @@ cleanup() {
     echo ""
     echo "  [$(ts)] Shutting down..."
     [ -n "${SERVER_PID}" ] && kill ${SERVER_PID} 2>/dev/null || true
-    [ -n "${TUNNEL_PID}" ] && kill ${TUNNEL_PID} 2>/dev/null || true
     [ -n "${SERVER_PID}" ] && wait ${SERVER_PID} 2>/dev/null || true
-    [ -n "${TUNNEL_PID}" ] && wait ${TUNNEL_PID} 2>/dev/null || true
     rm -f "${TMPFILE}"
     echo "  Stopped. $(date)"
 }
@@ -680,127 +678,154 @@ rm -f "${VAL_HEALTH}" "${VAL_READY}" "${VAL_QUERY}"
 echo ""
 
 # ════════════════════════════════════════════════════════════════════════
-#  PHASE 5 — CLOUDFLARE TUNNEL
+#  PHASE 5 — CLOUDFLARE TUNNEL (DISABLED)
+# ════════════════════════════════════════════════════════════════════════
+#
+# DISABLED: HPC firewall blocks outbound QUIC/TCP on port 7844.
+# Cloudflare Quick Tunnel cannot establish a persistent connection
+# to Cloudflare Edge. Diagnostics confirmed:
+#   - DNS Resolution → PASS
+#   - Cloudflare API → PASS
+#   - UDP Connectivity (7844) → FAIL
+#   - TCP Connectivity (7844) → FAIL
+#
+# Planned fallback: SSH Port Forwarding (not yet implemented).
+# Keeping code intact for future use when networking is resolved.
+#
+# To re-enable: uncomment the block below.
 # ════════════════════════════════════════════════════════════════════════
 
-banner "PHASE 5 — Cloudflare Tunnel"
+banner "PHASE 5 — Cloudflare Tunnel (DISABLED)"
 
-TUNNEL_LOG="${PROJECT_DIR}/outputs/logs/tunnel_${SLURM_JOB_ID:-$$}.log"
-
-step 5 "Setting up cloudflared"
-if [ -x "${CLOUDFLARED_BIN}" ]; then
-    ok "Cached at ${CLOUDFLARED_BIN}"
-else
-    echo "  Downloading cloudflared..."
-    mkdir -p "$(dirname ${CLOUDFLARED_BIN})"
-    curl -sL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" \
-        -o "${CLOUDFLARED_BIN}" 2>/dev/null
-    chmod +x "${CLOUDFLARED_BIN}"
-    ok "Downloaded to ${CLOUDFLARED_BIN}"
-fi
-
-step 5 "Starting tunnel"
-"${CLOUDFLARED_BIN}" tunnel --url "http://localhost:${PORT}" \
-    --no-autoupdate \
-    > "${TUNNEL_LOG}" 2>&1 &
-
-TUNNEL_PID=$!
-ok "Tunnel PID: ${TUNNEL_PID}"
-
-# Wait for URL
-PUBLIC_URL=""
-TUNNEL_WAIT=0
-while [ $TUNNEL_WAIT -lt 30 ]; do
-    sleep 2
-    TUNNEL_WAIT=$((TUNNEL_WAIT + 2))
-    PUBLIC_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "${TUNNEL_LOG}" 2>/dev/null | head -1)
-    if [ -n "${PUBLIC_URL}" ]; then break; fi
-    if ! kill -0 ${TUNNEL_PID} 2>/dev/null; then
-        echo "  ⚠ Tunnel process died. Check: ${TUNNEL_LOG}"
-        PUBLIC_URL=""
-        break
-    fi
-done
-
+echo "  Cloudflare Tunnel is DISABLED."
+echo "  Reason: HPC firewall blocks outbound QUIC/TCP on port 7844."
+echo "  Cloudflared cannot maintain a persistent connection to Cloudflare Edge."
 echo ""
-if [ -n "${PUBLIC_URL}" ]; then
-    echo "╔══════════════════════════════════════════════════════════════════╗"
-    echo "║                                                                ║"
-    echo "║  🌐 PUBLIC HTTPS ENDPOINT ACTIVE                               ║"
-    echo "║                                                                ║"
-    echo "║  PUBLIC_URL=${PUBLIC_URL}"
-    echo "║                                                                ║"
-    echo "║  Endpoints:                                                    ║"
-    echo "║    GET  ${PUBLIC_URL}/health"
-    echo "║    GET  ${PUBLIC_URL}/ready"
-    echo "║    POST ${PUBLIC_URL}/query"
-    echo "║    GET  ${PUBLIC_URL}/docs  (OpenAPI)"
-    echo "║                                                                ║"
-    echo "╚══════════════════════════════════════════════════════════════════╝"
-else
-    echo "  ⚠ Could not obtain public URL within 30s"
-    echo "  Server still running at http://localhost:${PORT}"
-fi
+echo "  Diagnostics:"
+echo "    DNS Resolution     → PASS"
+echo "    Cloudflare API     → PASS"
+echo "    UDP (port 7844)    → FAIL (blocked by HPC firewall)"
+echo "    TCP (port 7844)    → FAIL (blocked by HPC firewall)"
+echo ""
+echo "  Planned fallback: SSH Port Forwarding (not yet implemented)."
+echo "  Server remains accessible at http://localhost:${PORT}"
+echo ""
+
+PUBLIC_URL=""
+
+# ── Original Cloudflare code (preserved for future use) ──
+#
+# TUNNEL_LOG="${PROJECT_DIR}/outputs/logs/tunnel_${SLURM_JOB_ID:-$$}.log"
+#
+# step 5 "Setting up cloudflared"
+# if [ -x "${CLOUDFLARED_BIN}" ]; then
+#     ok "Cached at ${CLOUDFLARED_BIN}"
+# else
+#     echo "  Downloading cloudflared..."
+#     mkdir -p "$(dirname ${CLOUDFLARED_BIN})"
+#     curl -sL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" \
+#         -o "${CLOUDFLARED_BIN}" 2>/dev/null
+#     chmod +x "${CLOUDFLARED_BIN}"
+#     ok "Downloaded to ${CLOUDFLARED_BIN}"
+# fi
+#
+# step 5 "Starting tunnel"
+# "${CLOUDFLARED_BIN}" tunnel --url "http://localhost:${PORT}" \
+#     --no-autoupdate \
+#     > "${TUNNEL_LOG}" 2>&1 &
+#
+# TUNNEL_PID=$!
+# ok "Tunnel PID: ${TUNNEL_PID}"
+#
+# # Wait for URL
+# PUBLIC_URL=""
+# TUNNEL_WAIT=0
+# while [ $TUNNEL_WAIT -lt 30 ]; do
+#     sleep 2
+#     TUNNEL_WAIT=$((TUNNEL_WAIT + 2))
+#     PUBLIC_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "${TUNNEL_LOG}" 2>/dev/null | head -1)
+#     if [ -n "${PUBLIC_URL}" ]; then break; fi
+#     if ! kill -0 ${TUNNEL_PID} 2>/dev/null; then
+#         echo "  ⚠ Tunnel process died. Check: ${TUNNEL_LOG}"
+#         PUBLIC_URL=""
+#         break
+#     fi
+# done
+#
+# echo ""
+# if [ -n "${PUBLIC_URL}" ]; then
+#     echo "╔══════════════════════════════════════════════════════════════════╗"
+#     echo "║  🌐 PUBLIC HTTPS ENDPOINT ACTIVE                               ║"
+#     echo "║  PUBLIC_URL=${PUBLIC_URL}"
+#     echo "╚══════════════════════════════════════════════════════════════════╝"
+# else
+#     echo "  ⚠ Could not obtain public URL within 30s"
+#     echo "  Server still running at http://localhost:${PORT}"
+# fi
 
 # ════════════════════════════════════════════════════════════════════════
-#  PHASE 6 — PUBLIC ENDPOINT VERIFICATION
+#  PHASE 6 — PUBLIC ENDPOINT VERIFICATION (DISABLED)
+# ════════════════════════════════════════════════════════════════════════
+#
+# DISABLED: No public URL available (Cloudflare Tunnel disabled).
 # ════════════════════════════════════════════════════════════════════════
 
-banner "PHASE 6 — Public Endpoint Verification"
+banner "PHASE 6 — Public Endpoint Verification (DISABLED)"
 
-if [ -n "${PUBLIC_URL}" ]; then
-    PUB_PASS=0
-    PUB_FAIL=0
+echo "  Skipped — Cloudflare Tunnel is disabled (HPC firewall)."
+echo "  Local API at http://localhost:${PORT} is fully verified in Phase 4."
 
-    # /health
-    PUB_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" --max-time 15 "${PUBLIC_URL}/health" 2>/dev/null || echo "000")
-    if [ "${PUB_CODE}" = "200" ]; then
-        ok "Public /health → 200"
-        PUB_PASS=$((PUB_PASS + 1))
-    else
-        fail "Public /health → ${PUB_CODE}"
-        PUB_FAIL=$((PUB_FAIL + 1))
-    fi
-
-    # /ready
-    PUB_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" --max-time 15 "${PUBLIC_URL}/ready" 2>/dev/null || echo "000")
-    if [ "${PUB_CODE}" = "200" ]; then
-        PUB_DET=$(cat "${TMPFILE}" | python -c "import sys,json; print(json.load(sys.stdin).get('detail',''))" 2>/dev/null || echo "?")
-        ok "Public /ready → ${PUB_DET}"
-        PUB_PASS=$((PUB_PASS + 1))
-    else
-        fail "Public /ready → ${PUB_CODE}"
-        PUB_FAIL=$((PUB_FAIL + 1))
-    fi
-
-    # /query
-    PUB_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" --max-time 120 \
-        -X POST "${PUBLIC_URL}/query" \
-        -H "Content-Type: application/json" \
-        -d '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3}' 2>/dev/null || echo "000")
-
-    if [ "${PUB_CODE}" = "200" ]; then
-        PUB_ANS=$(cat "${TMPFILE}" | python -c "
-import sys, json
-d = json.load(sys.stdin)
-a = d.get('answer','')
-if a and 'Pipeline not loaded' not in a:
-    print(str(len(a)) + 'ch latency=' + str(d.get('latency_ms',0)) + 'ms')
-else:
-    print('PLACEHOLDER')
-" 2>/dev/null || echo "FAIL")
-        ok "Public /query → ${PUB_ANS}"
-        PUB_PASS=$((PUB_PASS + 1))
-    else
-        fail "Public /query → ${PUB_CODE}"
-        PUB_FAIL=$((PUB_FAIL + 1))
-    fi
-
-    echo ""
-    echo "  Public tests: ${PUB_PASS}/3 passed"
-else
-    echo "  Skipped — no public URL"
-fi
+# ── Original public verification code (preserved for future use) ──
+#
+# if [ -n "${PUBLIC_URL}" ]; then
+#     PUB_PASS=0
+#     PUB_FAIL=0
+#
+#     PUB_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" --max-time 15 "${PUBLIC_URL}/health" 2>/dev/null || echo "000")
+#     if [ "${PUB_CODE}" = "200" ]; then
+#         ok "Public /health → 200"
+#         PUB_PASS=$((PUB_PASS + 1))
+#     else
+#         fail "Public /health → ${PUB_CODE}"
+#         PUB_FAIL=$((PUB_FAIL + 1))
+#     fi
+#
+#     PUB_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" --max-time 15 "${PUBLIC_URL}/ready" 2>/dev/null || echo "000")
+#     if [ "${PUB_CODE}" = "200" ]; then
+#         PUB_DET=$(cat "${TMPFILE}" | python -c "import sys,json; print(json.load(sys.stdin).get('detail',''))" 2>/dev/null || echo "?")
+#         ok "Public /ready → ${PUB_DET}"
+#         PUB_PASS=$((PUB_PASS + 1))
+#     else
+#         fail "Public /ready → ${PUB_CODE}"
+#         PUB_FAIL=$((PUB_FAIL + 1))
+#     fi
+#
+#     PUB_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" --max-time 120 \
+#         -X POST "${PUBLIC_URL}/query" \
+#         -H "Content-Type: application/json" \
+#         -d '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3}' 2>/dev/null || echo "000")
+#     if [ "${PUB_CODE}" = "200" ]; then
+#         PUB_ANS=$(cat "${TMPFILE}" | python -c "
+# import sys, json
+# d = json.load(sys.stdin)
+# a = d.get('answer','')
+# if a and 'Pipeline not loaded' not in a:
+#     print(str(len(a)) + 'ch latency=' + str(d.get('latency_ms',0)) + 'ms')
+# else:
+#     print('PLACEHOLDER')
+# " 2>/dev/null || echo "FAIL")
+#         ok "Public /query → ${PUB_ANS}"
+#         PUB_PASS=$((PUB_PASS + 1))
+#     else
+#         fail "Public /query → ${PUB_CODE}"
+#         PUB_FAIL=$((PUB_FAIL + 1))
+#     fi
+#
+#     echo ""
+#     echo "  Public tests: ${PUB_PASS}/3 passed"
+# else
+#     echo "  Skipped — no public URL"
+# fi
 
 # ════════════════════════════════════════════════════════════════════════
 #  PHASE 7 — DEPLOYMENT SUMMARY + KEEP-ALIVE
@@ -823,11 +848,7 @@ echo "║  Total Deploy : ${DEPLOY_DURATION}s"
 echo "║  Local Tests  : ${TEST_PASS}/${TOTAL} passed"
 echo "║  Server PID   : ${SERVER_PID}"
 echo "║  Local URL    : http://localhost:${PORT}"
-if [ -n "${PUBLIC_URL}" ]; then
-echo "║  Public URL   : ${PUBLIC_URL}"
-echo "║  OpenAPI Docs : ${PUBLIC_URL}/docs"
-echo "║  Tunnel PID   : ${TUNNEL_PID}"
-fi
+echo "║  Cloudflare   : DISABLED (HPC firewall blocks port 7844)"
 echo "║  Report       : ${REPORT_FILE}"
 echo "║                                                                ║"
 if [ ${TEST_FAIL} -eq 0 ]; then
@@ -868,7 +889,7 @@ echo "SERVER_PID=${SERVER_PID}"
 echo ""
 
 # ── Keep-alive ──
-echo "  [$(ts)] Server and tunnel running. Walltime: 4h or scancel ${SLURM_JOB_ID:-$$}"
+echo "  [$(ts)] Server running (no tunnel). Walltime: 4h or scancel ${SLURM_JOB_ID:-$$}"
 echo ""
 
 while true; do

@@ -385,10 +385,30 @@ async def run_query(request: QueryRequest):
     # Diagnostic: log router identity
     logger.debug(f"/query: router id={id(router)}, query='{request.query[:80]}'")
 
-    # Load image if needed
+    # Load image if path provided (for true multimodal retrieval)
     image = None
-    # (image loading from path is not part of the frozen contract,
-    #  but the pipeline adapters accept Optional[Image])
+    if request.image_path:
+        import os
+        from src.shared.image_utils import load_image
+        resolved = request.image_path
+        if not os.path.isabs(resolved):
+            resolved = os.path.join(os.getcwd(), resolved)
+        try:
+            image = load_image(resolved)
+            logger.info(
+                f"/query: loaded image from {resolved} "
+                f"(size={image.size}, mode={image.mode})"
+            )
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Image not found: {resolved}",
+            )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot open image: {e}",
+            )
 
     # Map domain: "auto" → None (triggers auto-detection in router)
     domain_hint = request.domain if request.domain != "auto" else None

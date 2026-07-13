@@ -39,12 +39,11 @@ python -u -m uvicorn src.api.app:app --host 0.0.0.0 --port 8847 --log-level info
 # 6. Wait ~5-10 minutes for model loading, then test
 curl -s http://localhost:8847/ready | python -m json.tool
 
-# 7. Start public tunnel
-bash scripts/start_cloudflare.sh
-
-# 8. Run full test suite
+# 7. Run full test suite
 bash scripts/test_api.sh
-bash scripts/test_api.sh https://XXXXX.trycloudflare.com
+
+# 8. Generate API examples
+python tools/generate_api_examples.py --server http://localhost:8847 --no-wait
 ```
 
 ---
@@ -52,14 +51,15 @@ bash scripts/test_api.sh https://XXXXX.trycloudflare.com
 ## SLURM Batch Deployment
 
 ```bash
-# Submit (runs everything automatically)
+# Submit production deployment (runs everything automatically)
 sbatch scripts/slurm_production.sh
+
+# Submit API example generation
+sbatch scripts/slurm_generate_examples.sh
 
 # Monitor
 tail -f outputs/logs/production_<JOBID>.log
-
-# Find public URL
-grep "PUBLIC_URL" outputs/logs/production_<JOBID>.log
+tail -f outputs/logs/gen_examples_<JOBID>.log
 
 # Cancel when done
 scancel <JOBID>
@@ -71,24 +71,74 @@ scancel <JOBID>
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `scripts/slurm_production.sh` | Full SLURM deployment (22 steps + tunnel + stability) | `sbatch scripts/slurm_production.sh` |
+| `scripts/slurm_production.sh` | Full SLURM deployment (env + server + tests + keep-alive) | `sbatch scripts/slurm_production.sh` |
+| `scripts/slurm_generate_examples.sh` | Generate verified API examples | `sbatch scripts/slurm_generate_examples.sh` |
 | `scripts/test_api.sh` | Standalone API test (11 tests, 3 retrieval modes) | `bash scripts/test_api.sh [URL]` |
-| `scripts/start_cloudflare.sh` | Standalone tunnel launcher | `bash scripts/start_cloudflare.sh [PORT]` |
+| `scripts/start_cloudflare.sh` | Standalone tunnel launcher (currently blocked) | `bash scripts/start_cloudflare.sh [PORT]` |
+| `tools/generate_api_examples.py` | Permanent API example generator (Python) | `python tools/generate_api_examples.py` |
 
 ---
 
-## Cloudflare vs ngrok
+## Public Deployment Status
 
-| Feature | Cloudflare Quick Tunnel | ngrok |
-|---------|------------------------|-------|
-| Account required | **No** | Yes (signup + auth token) |
-| Personal info | **None** | Email logged |
-| HTTPS | **Automatic** | Automatic |
-| Setup | Single binary, zero config | Requires auth token setup |
-| HPC friendly | **Yes** — outbound only | May need config file |
-| Privacy | **No tracking** | Requests logged |
+| Component | Status |
+|-----------|--------|
+| Local FastAPI deployment | ✅ Working |
+| Healthcare pipeline | ✅ Working |
+| Hybrid retrieval (ColQwen2 dual-index + RRF) | ✅ Working |
+| Qwen2-VL generation | ✅ Working |
+| Image input (multimodal queries) | ✅ Working |
+| API validation (text / image / hybrid) | ✅ Working |
+| SLURM deployment | ✅ Working |
+| Cloudflare Tunnel | ❌ Blocked by HPC firewall |
 
-**Decision: Cloudflare** — zero account, zero personal info, automatic HTTPS.
+### HPC Network Limitation
+
+The HPC cluster blocks outbound QUIC/TCP traffic on Cloudflare Tunnel port (7844), preventing `cloudflared` from maintaining a persistent connection to Cloudflare Edge.
+
+**Diagnostics:**
+
+| Test | Result |
+|------|--------|
+| DNS Resolution | ✅ PASS |
+| Cloudflare API (HTTPS) | ✅ PASS |
+| UDP Connectivity (port 7844) | ❌ FAIL |
+| TCP Connectivity (port 7844) | ❌ FAIL |
+
+This is an **infrastructure restriction**, not an application issue. The Cloudflare Tunnel implementation is preserved in `scripts/slurm_production.sh` (commented out) and `scripts/start_cloudflare.sh` for future use.
+
+### Planned Fallback Options
+
+1. **SSH Port Forwarding** (preferred) — Forward HPC port to local machine via SSH tunnel. Zero infrastructure changes required.
+2. **VPN-only demonstration** — Access the API directly from within the HPC network via VPN.
+3. **Administrator-approved reverse proxy** — Request HPC admins to set up an authorized reverse proxy.
+4. **Named Cloudflare Tunnel** — If HPC networking permits outbound port 7844 in the future, re-enable the existing Cloudflare implementation.
+
+> **Note:** None of the fallback options are implemented yet. The API is fully functional on `localhost:8847` within the HPC node.
+
+---
+
+## API Image Support (Multimodal Queries)
+
+The `/query` endpoint supports true multimodal retrieval via the `image_path` field:
+
+```json
+{
+    "query": "Does this chest X-ray show cardiomegaly?",
+    "domain": "healthcare",
+    "image_path": "data/openi/images/1_IM-0001-4001.dcm.png",
+    "top_k": 3
+}
+```
+
+When `image_path` is provided:
+1. The image is loaded and encoded by **ColQwen2** for visual similarity retrieval
+2. Both image index and text index are queried (dual-index retrieval)
+3. Results are fused using **Reciprocal Rank Fusion (RRF)**
+4. Question-aware reranking is applied
+5. **Qwen2-VL** generates the answer using both the query image and retrieved context
+
+Without `image_path`, the query uses text-only retrieval.
 
 ---
 
@@ -103,10 +153,16 @@ curl -s http://localhost:8847/health | python -m json.tool
 # Readiness check
 curl -s http://localhost:8847/ready | python -m json.tool
 
-# Healthcare query
+# Text-only healthcare query
 curl -s -X POST http://localhost:8847/query \
   -H "Content-Type: application/json" \
   -d '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3}' \
+  | python -m json.tool
+
+# Multimodal query (image + text)
+curl -s -X POST http://localhost:8847/query \
+  -H "Content-Type: application/json" \
+  -d '{"query":"Does this chest X-ray show cardiomegaly?","domain":"healthcare","image_path":"data/openi/images/1_IM-0001-4001.dcm.png","top_k":3}' \
   | python -m json.tool
 
 # Auto-routing query
@@ -116,24 +172,9 @@ curl -s -X POST http://localhost:8847/query \
   | python -m json.tool
 ```
 
-### Public URL (from anywhere)
-
-```bash
-# Replace XXXXX with actual subdomain from tunnel output
-PUBLIC_URL=https://XXXXX.trycloudflare.com
-
-curl -s $PUBLIC_URL/health | python -m json.tool
-curl -s $PUBLIC_URL/ready | python -m json.tool
-
-curl -s -X POST $PUBLIC_URL/query \
-  -H "Content-Type: application/json" \
-  -d '{"query":"What is cardiomegaly?","domain":"healthcare","top_k":3}' \
-  | python -m json.tool
-```
-
 ### OpenAPI Documentation
 
-Open in browser: `https://XXXXX.trycloudflare.com/docs`
+Open in browser (from HPC node): `http://localhost:8847/docs`
 
 ---
 
@@ -149,7 +190,7 @@ Open in browser: `https://XXXXX.trycloudflare.com/docs`
 {"ready":true,"domains":["healthcare"],"detail":"Healthcare pipeline LIVE"}
 ```
 
-### POST /query
+### POST /query (text-only)
 ```json
 {
   "answer": "Cardiomegaly refers to an enlarged heart...",
@@ -180,9 +221,10 @@ Open in browser: `https://XXXXX.trycloudflare.com/docs`
 | `Pipeline not loaded` in answer | Index not found via symlink | Check `ls -la data/indexes/colqwen2_index/document_store.json` |
 | Pydantic `ValidationError` on snippet | Source has `snippet=None` | Fixed in commit `893d2aa` — `git pull` |
 | Server dies during startup | OOM | Check `--mem-per-cpu=8192` and GPU memory |
-| Tunnel URL not appearing | Firewall blocks outbound | Try `curl -s https://cloudflare.com` |
+| Cloudflare Tunnel fails | HPC blocks outbound port 7844 | Use SSH port forwarding instead (see Planned Fallback Options) |
 | `cloudflared` download fails | No internet on compute node | Download on login node: `curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o .local/bin/cloudflared && chmod +x .local/bin/cloudflared` |
 | 500 error on `/query` | Check server logs | `cat outputs/logs/production_*.err` |
+| `Image not found` on `/query` | Invalid `image_path` | Ensure the path is relative to project root or absolute. Check `ls data/openi/images/` |
 
 ---
 
@@ -196,14 +238,14 @@ Open in browser: `https://XXXXX.trycloudflare.com/docs`
 - [ ] FastAPI server started on port 8847
 - [ ] `GET /health` → `{"status":"healthy"}`
 - [ ] `GET /ready` → `{"ready":true,...,"detail":"Healthcare pipeline LIVE"}`
-- [ ] `POST /query` returns real answer (not placeholder)
+- [ ] `POST /query` (text) returns real answer (not placeholder)
+- [ ] `POST /query` (image) with `image_path` returns real answer
+- [ ] `POST /query` (hybrid) image + text returns real answer
 - [ ] Sources non-empty
 - [ ] Retrieval scores populated
 - [ ] Verification fields populated
 - [ ] Latency reported
-- [ ] Cloudflare tunnel active
-- [ ] Public URL obtained
-- [ ] Public `/health` → 200
-- [ ] Public `/query` → real answer
-- [ ] Stability test: 9 queries × 3 rounds pass
+- [ ] ~~Cloudflare tunnel active~~ (BLOCKED — HPC firewall)
+- [ ] ~~Public URL obtained~~ (BLOCKED — HPC firewall)
+- [ ] API examples generated (`python tools/generate_api_examples.py`)
 - [ ] Server stable (no OOM, no crashes)

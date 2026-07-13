@@ -930,7 +930,7 @@ def main() -> int:
     else:
         print("║  ⚠  PARTIAL SUCCESS — some queries failed               ║")
     print("╠══════════════════════════════════════════════════════════╣")
-    print(f"║  Passed:  {passed}/{total:<44s}║")
+    print(f"║  Passed:  {f'{passed}/{total}':<44s}║")
     print(f"║  Output:  {str(generator.output_dir):<44s}║")
     print("╚══════════════════════════════════════════════════════════╝")
     print("")

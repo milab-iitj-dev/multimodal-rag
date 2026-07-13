@@ -82,3 +82,38 @@ queries:
       domain: "healthcare"
       top_k: 3
       description: "Binary clinical question with image — tests image-aware generation"
+
+  # ── D. Scientific retrieval (text-only) ──
+  # Tests the Scientific pipeline: DomainGuard → ColPali + SciNCL →
+  # weighted fusion → Qwen2-VL strict generation with paper context.
+  # Corpus: 10 Vision Transformer research papers from arXiv.
+  scientific:
+    - id: "sci_01"
+      query: "What is the Vision Transformer (ViT) architecture and how does it process images?"
+      domain: "scientific"
+      top_k: 3
+      description: "Core ViT architecture — tests retrieval from foundational ViT paper"
+
+    - id: "sci_02"
+      query: "How does self-attention work in vision transformers?"
+      domain: "scientific"
+      top_k: 3
+      description: "Attention mechanism — tests cross-paper retrieval"
+
+    - id: "sci_03"
+      query: "What is the DeiT training strategy and how does knowledge distillation improve accuracy?"
+      domain: "scientific"
+      top_k: 3
+      description: "DeiT distillation — tests specific paper retrieval and citation"
+
+    - id: "sci_04"
+      query: "How does Swin Transformer use shifted window attention?"
+      domain: "scientific"
+      top_k: 3
+      description: "Swin Transformer — tests hierarchical architecture retrieval"
+
+    - id: "sci_05"
+      query: "What are the advantages of EfficientFormer over standard vision transformers?"
+      domain: "scientific"
+      top_k: 3
+      description: "EfficientFormer — tests efficiency vs accuracy trade-off retrieval"

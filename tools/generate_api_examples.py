@@ -519,6 +519,24 @@ class APIExampleGenerator:
                 image_path=img_path,
             )
 
+        # ── D. Scientific retrieval (text-only) ──
+        scientific_queries = queries_cfg.get("scientific", [])
+        if scientific_queries:
+            print("")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            print("  D. Scientific Retrieval")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+            for q in scientific_queries:
+                self.run_query(
+                    query_id=q["id"],
+                    mode="scientific",
+                    query=q["query"],
+                    domain=q.get("domain", "scientific"),
+                    top_k=q.get("top_k", 3),
+                    description=q.get("description", ""),
+                )
+
         return all(r.passed for r in self.results)
 
     # ── Save artifacts ────────────────────────────────────────
@@ -575,7 +593,7 @@ class APIExampleGenerator:
             "queries": [],
         }
 
-        for mode in ("text", "image", "hybrid"):
+        for mode in ("text", "image", "hybrid", "scientific"):
             mode_results = [r for r in self.results if r.mode == mode]
             mode_passed = [r for r in mode_results if r.passed]
             summary["by_mode"][mode] = {
@@ -680,6 +698,7 @@ class APIExampleGenerator:
             "| text | Text-only query | ColQwen2 text index → reranking |",
             "| image | Query image + text | ColQwen2 image encoding → image index |",
             "| hybrid | Image + text | Dual-index → RRF fusion → reranking → Qwen2-VL |",
+            "| scientific | Scientific text query | ColPali + SciNCL → weighted fusion → Qwen2-VL |",
             "",
             "## Files",
             "",

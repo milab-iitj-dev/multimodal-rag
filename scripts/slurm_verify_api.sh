@@ -32,6 +32,7 @@
 PROJECT_DIR="/scratch/data/divyasaxena_rs/Gokul_Faleja_internship/mmrag_unified"
 VENV_DIR="${PROJECT_DIR}/.venv"
 HC_DATA_ROOT="/scratch/data/divyasaxena_rs/Gokul_Faleja_internship/mmrag-healthcare"
+SCI_DATA_ROOT="/scratch/data/divyasaxena_rs/Vineet_internship"
 PORT=8847
 HF_CACHE="/scratch/data/divyasaxena_rs/Gokul_Faleja_internship/.cache/huggingface"
 
@@ -121,6 +122,7 @@ export TRANSFORMERS_CACHE="${HF_CACHE}/hub"
 export HF_DATASETS_CACHE="${HF_CACHE}/datasets"
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export RAG_BASE_DIR="${SCI_DATA_ROOT}"
 
 cd "${PROJECT_DIR}"
 

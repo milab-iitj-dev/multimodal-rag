@@ -50,6 +50,9 @@ VENV_DIR="${PROJECT_DIR}/.venv"
 # Healthcare data lives here (already verified on HPC)
 HC_DATA_ROOT="/scratch/data/divyasaxena_rs/Gokul_Faleja_internship/mmrag-healthcare"
 
+# Scientific data lives here (separate workspace)
+SCI_DATA_ROOT="/scratch/data/divyasaxena_rs/Vineet_internship"
+
 # Port — use a high port unlikely to collide
 PORT=8847
 
@@ -219,7 +222,12 @@ echo ""
 #  SCIENTIFIC PIPELINE STATUS
 # ════════════════════════════════════════════════════════════════
 
-echo "[INFO] Scientific pipeline disabled — no indices available"
+echo "[INFO] Scientific pipeline: RAG_BASE_DIR=${SCI_DATA_ROOT}"
+if [ -f "${SCI_DATA_ROOT}/data/indices/page_metadata.json" ]; then
+    echo "       Scientific data found — pipeline will initialize"
+else
+    echo "       Scientific data NOT found — pipeline will be placeholder"
+fi
 echo "       Healthcare success determines SLURM job result"
 echo ""
 
@@ -251,6 +259,7 @@ export TRANSFORMERS_CACHE="${HF_CACHE}/hub"
 export HF_DATASETS_CACHE="${HF_CACHE}/datasets"
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export RAG_BASE_DIR="${SCI_DATA_ROOT}"
 
 echo "[SETUP 4/4] Changing to project directory..."
 cd "${PROJECT_DIR}"

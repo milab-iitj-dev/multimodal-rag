@@ -35,6 +35,7 @@
 PROJECT_DIR="/scratch/data/divyasaxena_rs/Gokul_Faleja_internship/mmrag_unified"
 VENV_DIR="${PROJECT_DIR}/.venv"
 HC_DATA_ROOT="/scratch/data/divyasaxena_rs/Gokul_Faleja_internship/mmrag-healthcare"
+SCI_DATA_ROOT="/scratch/data/divyasaxena_rs/Vineet_internship"
 PORT=8847
 HF_CACHE="/scratch/data/divyasaxena_rs/Gokul_Faleja_internship/.cache/huggingface"
 CLOUDFLARED_BIN="${PROJECT_DIR}/.local/bin/cloudflared"
@@ -160,7 +161,9 @@ export TRANSFORMERS_CACHE="${HF_CACHE}/hub"
 export HF_DATASETS_CACHE="${HF_CACHE}/datasets"
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export RAG_BASE_DIR="${SCI_DATA_ROOT}"
 ok "HF_HOME=${HF_HOME}"
+ok "RAG_BASE_DIR=${RAG_BASE_DIR}"
 
 cd "${PROJECT_DIR}"
 ok "CWD: $(pwd)"
@@ -286,6 +289,46 @@ for f in "configs/healthcare/model_config.yaml" "configs/healthcare/retrieval_co
     fi
 done
 ok "All healthcare configs present"
+
+# ── Scientific data verification ──
+step 1 "Scientific data"
+SCI_METADATA="${SCI_DATA_ROOT}/data/indices/page_metadata.json"
+SCI_DOCMAP="${SCI_DATA_ROOT}/data/indices/doc_mapping.json"
+SCI_CHROMA="${SCI_DATA_ROOT}/data/indices/chroma_index"
+SCI_MULTIVEC="${SCI_DATA_ROOT}/data/indices/multivectors"
+
+if [ -f "${SCI_METADATA}" ]; then
+    ok "page_metadata.json exists"
+else
+    echo "  ⚠ Scientific page_metadata.json not found — scientific pipeline will be placeholder"
+fi
+
+if [ -f "${SCI_DOCMAP}" ]; then
+    ok "doc_mapping.json exists"
+else
+    echo "  ⚠ Scientific doc_mapping.json not found"
+fi
+
+if [ -d "${SCI_CHROMA}" ]; then
+    CHROMA_FILES=$(find "${SCI_CHROMA}" -type f 2>/dev/null | wc -l)
+    ok "chroma_index exists (${CHROMA_FILES} files)"
+else
+    echo "  ⚠ Scientific chroma_index not found"
+fi
+
+if [ -d "${SCI_MULTIVEC}" ]; then
+    NPY_COUNT=$(find "${SCI_MULTIVEC}" -name '*.npy' ! -name '*.meta.npy' 2>/dev/null | wc -l)
+    ok "multivectors exists (${NPY_COUNT} .npy files)"
+else
+    echo "  ⚠ Scientific multivectors not found"
+fi
+
+# Scientific config
+if [ -f "${PROJECT_DIR}/configs/scientific/config.yaml" ]; then
+    ok "Scientific config.yaml exists"
+else
+    echo "  ⚠ Scientific config.yaml not found"
+fi
 
 echo ""
 echo "  ✅ PHASE 1 COMPLETE — Environment verified"

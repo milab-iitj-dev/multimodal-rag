@@ -234,6 +234,6 @@ def create_scientific_pipeline() -> Optional[object]:
         return pipeline
 
     except Exception as e:
-        logger.info(f"Scientific pipeline disabled — {e}")
-        logger.debug(traceback.format_exc())
+        logger.error(f"Scientific pipeline disabled — {e}")
+        logger.error(traceback.format_exc())
         return None

@@ -58,3 +58,7 @@ def setup_logger(
         logger.addHandler(ch)
 
     return logger
+
+
+# Alias: scientific domain modules import get_logger
+get_logger = setup_logger

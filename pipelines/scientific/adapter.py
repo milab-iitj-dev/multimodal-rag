@@ -66,9 +66,6 @@ class ScientificPipeline(BasePipeline):
 
         # Convert sources: SourceCitation → SourceItem
         sources = []
-        top_colpali_score = 0.0
-        top_scincl_score = 0.0
-        top_fused_score = 0.0
 
         if hasattr(result, 'sources') and result.sources:
             for s in result.sources:
@@ -81,11 +78,15 @@ class ScientificPipeline(BasePipeline):
                     page_numbers=getattr(s, 'page_numbers', []),
                     metadata={
                         "paper_id": getattr(s, 'paper_id', ''),
+                        "colpali_norm_score": getattr(s, 'colpali_norm_score', 0.0),
+                        "scincl_norm_score": getattr(s, 'scincl_norm_score', 0.0),
                     },
                 ))
-                # Track top fused score for retrieval_metadata
-                if rel_score > top_fused_score:
-                    top_fused_score = rel_score
+
+        # Extract top-ranked component scores propagated by OnlinePipeline
+        top_colpali_score = getattr(result, 'top_colpali_score', 0.0)
+        top_scincl_score = getattr(result, 'top_scincl_score', 0.0)
+        top_fused_score = getattr(result, 'top_fused_score', 0.0)
 
         # Build metadata from check_result
         check_passed = False
@@ -107,6 +108,7 @@ class ScientificPipeline(BasePipeline):
                 "attribution_passed": attr_passed,
                 "faithfulness_passed": faith_passed,
                 # Retrieval metadata for API contract
+                # Scientific always runs both ColPali + SciNCL → fused
                 "retrieval_method": "fused",
                 "visual_score": top_colpali_score,
                 "text_score": top_scincl_score,

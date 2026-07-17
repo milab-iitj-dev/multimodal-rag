@@ -204,51 +204,65 @@ def _map_sources(unified_response) -> list[SourceItemResponse]:
 def _map_retrieval_metadata(unified_response) -> RetrievalMetadata:
     """Map UnifiedResponse.metadata → RetrievalMetadata.
 
-    Healthcare:
-        colpali = image retrieval score (ColQwen2 image)
-        scincl  = text retrieval score (ColQwen2 text)
-        fused   = RRF fused score
-        method  = "fused"
+    Score semantics (same contract for both domains):
+        colpali = image/visual retrieval score of the top-ranked source.
+                  Healthcare: ColQwen2 image MaxSim score.
+                  Scientific: normalized ColPali score (0.0–1.0).
+        scincl  = text retrieval score of the top-ranked source.
+                  Healthcare: ColQwen2 text MaxSim score.
+                  Scientific: normalized SciNCL score (0.0–1.0).
+        fused   = final fusion/RRF score of the top-ranked source.
+                  Healthcare: RRF fused score.
+                  Scientific: weighted fusion score (0.0–1.0).
 
-    Scientific:
-        colpali = ColPali visual score
-        scincl  = SciNCL text score
-        fused   = weighted fusion score
-        method  = from pipeline metadata
+    Method-driven score assignment:
+        scincl_only  → only scincl populated; colpali=0.0, fused=0.0
+        colpali_only → only colpali populated; scincl=0.0, fused=0.0
+        fused        → all three populated with real scores
     """
     meta = unified_response.metadata
     domain = unified_response.domain
 
-    # Extract scores from metadata (pipelines populate these)
-    colpali_score = meta.get("colpali_score", 0.0)
-    scincl_score = meta.get("scincl_score", 0.0)
-    fused_score = meta.get("fused_score", 0.0)
-
-    # Healthcare: extract from top source if available
-    if domain == "healthcare" and unified_response.sources:
-        top = unified_response.sources[0]
-        top_meta = top.metadata
-        colpali_score = colpali_score or top_meta.get("image_score", top.score)
-        scincl_score = scincl_score or top_meta.get("text_score", 0.0)
-        fused_score = fused_score or top_meta.get("rrf_score", top.score)
-
-    # Scientific: extract from metadata
-    if domain == "scientific":
-        colpali_score = colpali_score or meta.get("visual_score", 0.0)
-        scincl_score = scincl_score or meta.get("text_score", 0.0)
-        fused_score = fused_score or meta.get("fusion_score", 0.0)
-
-    # Determine method
+    # Determine retrieval method (populated by adapters)
     method = meta.get("retrieval_method", "fused")
     if method not in ("fused", "colpali_only", "scincl_only"):
         method = "fused"
 
+    # Extract domain-specific score keys from adapter metadata
+    if domain == "healthcare":
+        image_score = float(meta.get("image_score", 0.0))
+        text_score = float(meta.get("text_score", 0.0))
+        rrf_score = float(meta.get("rrf_score", 0.0))
+    elif domain == "scientific":
+        image_score = float(meta.get("visual_score", 0.0))
+        text_score = float(meta.get("text_score", 0.0))
+        rrf_score = float(meta.get("fusion_score", 0.0))
+    else:
+        image_score = 0.0
+        text_score = 0.0
+        rrf_score = 0.0
+
+    # Assign scores based on method — unused paths stay 0.0
+    if method == "scincl_only":
+        colpali_val = 0.0
+        scincl_val = text_score
+        fused_val = 0.0
+    elif method == "colpali_only":
+        colpali_val = image_score
+        scincl_val = 0.0
+        fused_val = 0.0
+    else:
+        # "fused" — all three populated
+        colpali_val = image_score
+        scincl_val = text_score
+        fused_val = rrf_score
+
     return RetrievalMetadata(
         method=method,
         scores=RetrievalScores(
-            colpali=round(float(colpali_score), 4),
-            scincl=round(float(scincl_score), 4),
-            fused=round(float(fused_score), 4),
+            colpali=round(colpali_val, 4),
+            scincl=round(scincl_val, 4),
+            fused=round(fused_val, 4),
         ),
     )
 
@@ -257,14 +271,21 @@ def _map_verification(unified_response) -> VerificationResult:
     """Map UnifiedResponse.metadata → VerificationResult.
 
     Healthcare:
-        attribution     = grounding_passed (from GroundingVerifier)
-        faithfulness    = confidence >= 0.5
-        confidence_pass = confidence_level != "LOW"
+        attribution     = grounding_passed (GroundingVerifier checks
+                          answer consistency with retrieved evidence).
+        faithfulness    = PROXY: confidence >= 0.5. This is NOT true
+                          NLI-based entailment verification.
+        confidence_pass = confidence_level != "LOW".
 
     Scientific:
-        attribution     = attribution_passed (from SelfCheck)
-        faithfulness    = faithfulness_passed (from SelfCheck)
-        confidence_pass = self_check_passed
+        attribution     = citation-presence check (whether the answer
+                          text references source papers by title/page).
+        faithfulness    = PROXY: is_from_docs flag (absence of
+                          NOT_IN_DOCUMENTS marker). Not true NLI.
+        confidence_pass = blended confidence >= 0.35.
+
+    NOTE: Both faithfulness fields are documented proxies, not actual
+    evidence-entailment verification.
     """
     meta = unified_response.metadata
     domain = unified_response.domain

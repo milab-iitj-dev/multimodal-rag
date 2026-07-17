@@ -105,11 +105,41 @@ class HealthcarePipeline(BasePipeline):
             grounding_passed = output.grounding_result.is_grounded
             was_corrected = output.grounding_result.was_corrected
 
-        # Determine retrieval method for contract
-        retrieval_method = "fused"
-        query_type = output.metadata.get("query_type", "")
-        if query_type == "text_only":
+        # Determine retrieval method from explicit retrieval mode
+        # HybridRetriever sets this to: "hybrid", "image_only", "text_only", "none"
+        retrieval_mode = output.metadata.get("retrieval_mode", "unknown")
+        if retrieval_mode == "text_only":
             retrieval_method = "scincl_only"
+        elif retrieval_mode == "image_only":
+            retrieval_method = "colpali_only"
+        else:
+            # "hybrid", "unknown", or fallback — report as fused
+            retrieval_method = "fused"
+
+        # Build per-mode score metadata for the top source.
+        # For text-only: doc.score IS the text retrieval score (no fusion).
+        # For image-only: doc.score IS the image retrieval score (no fusion).
+        # For hybrid: per-doc RRF metadata carries image_score, text_score, rrf_score.
+        top_image_score = 0.0
+        top_text_score = 0.0
+        top_rrf_score = 0.0
+        if sources:
+            top_meta = sources[0].metadata
+            if retrieval_mode == "text_only":
+                # Text retrieval only — score is text score, no image/fusion
+                top_text_score = top_meta.get("rrf_score", sources[0].score)
+                top_image_score = 0.0
+                top_rrf_score = 0.0
+            elif retrieval_mode == "image_only":
+                # Image retrieval only — score is image score, no text/fusion
+                top_image_score = top_meta.get("rrf_score", sources[0].score)
+                top_text_score = 0.0
+                top_rrf_score = 0.0
+            else:
+                # Hybrid/fused — extract all three from RRF metadata
+                top_image_score = top_meta.get("image_score", 0.0)
+                top_text_score = top_meta.get("text_score", 0.0)
+                top_rrf_score = top_meta.get("rrf_score", sources[0].score)
 
         return UnifiedResponse(
             domain="healthcare",
@@ -122,8 +152,12 @@ class HealthcarePipeline(BasePipeline):
                 "grounding_passed": grounding_passed,
                 # Retrieval metadata for API contract
                 "retrieval_method": retrieval_method,
+                "image_score": top_image_score,
+                "text_score": top_text_score,
+                "rrf_score": top_rrf_score,
                 # Pipeline internals
-                "query_type": query_type,
+                "retrieval_mode": retrieval_mode,
+                "query_type": output.metadata.get("query_type", ""),
                 "consensus": output.metadata.get("consensus", ""),
                 "was_corrected": was_corrected,
                 "retrieval_time_sec": output.retrieval_time_sec,

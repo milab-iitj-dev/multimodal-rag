@@ -305,6 +305,11 @@ class RAGGenerator:
                 "generation_path": (
                     "text_only" if llava_image is None else "vlm"
                 ),
+                # Explicit retrieval mode from HybridRetriever
+                # Values: "hybrid", "image_only", "text_only", "none"
+                "retrieval_mode": getattr(
+                    self.retriever, "_last_retrieval_mode", "unknown"
+                ),
             },
         )
 

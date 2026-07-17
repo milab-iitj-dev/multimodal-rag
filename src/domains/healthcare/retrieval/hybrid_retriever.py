@@ -103,6 +103,10 @@ class HybridRetriever(BaseRetriever):
         self.colqwen2 = colqwen2_retriever
         self.config = config or {}
 
+        # Tracks which retrieval path was used in the last retrieve() call.
+        # Values: "hybrid", "image_only", "text_only", "none"
+        self._last_retrieval_mode: str = "none"
+
         # Fusion settings
         fusion_cfg = (
             self.config
@@ -167,17 +171,20 @@ class HybridRetriever(BaseRetriever):
         if has_image and has_text and has_text_index:
             # Mode 3: Image + Text → dual retrieval + fusion
             logger.info("Hybrid mode: image + text → dual retrieval + RRF")
+            self._last_retrieval_mode = "hybrid"
             return self._retrieve_dual(query, query_image, top_k)
 
         elif has_image:
             # Mode 1: Image only → image retrieval
             logger.info("Hybrid mode: image only → image index")
+            self._last_retrieval_mode = "image_only"
             return self.colqwen2.retrieve_by_image(
                 query_image, query=query, top_k=top_k
             )
 
         elif has_text:
             # Mode 2: Text only → text retrieval
+            self._last_retrieval_mode = "text_only"
             if has_text_index:
                 logger.info("Hybrid mode: text only → text index")
                 results = self.colqwen2.retrieve_by_text(
@@ -198,6 +205,7 @@ class HybridRetriever(BaseRetriever):
 
         else:
             logger.warning("No query text or image provided")
+            self._last_retrieval_mode = "none"
             return []
 
     # ------------------------------------------------------------------ #

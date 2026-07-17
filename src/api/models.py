@@ -133,28 +133,40 @@ class RetrievalMetadata(BaseModel):
 class VerificationResult(BaseModel):
     """Verification/self-check results.
 
-    Healthcare mapping:
-        attribution     = grounding_passed
-        faithfulness    = confidence >= threshold (0.5)
-        confidence_pass = confidence_level != "LOW"
+    Healthcare:
+        attribution     = grounding_passed (GroundingVerifier checks
+                          answer consistency with retrieved evidence).
+        faithfulness    = PROXY: confidence >= 0.5. This is NOT true
+                          NLI-based entailment verification.
+        confidence_pass = confidence_level != "LOW".
 
-    Scientific mapping:
-        attribution     = attribution_passed (SelfCheck)
-        faithfulness    = faithfulness_passed (SelfCheck)
-        confidence_pass = overall check passed
+    Scientific:
+        attribution     = citation-presence check (whether the answer
+                          text references source papers by title/page).
+        faithfulness    = PROXY: is_from_docs flag (absence of
+                          NOT_IN_DOCUMENTS marker). Not true NLI.
+        confidence_pass = blended confidence >= 0.35.
+
+    NOTE: Both faithfulness fields are documented proxies, not actual
+    evidence-entailment verification.
     """
 
     attribution: bool = Field(
         default=True,
-        description="Whether the answer is attributed to evidence.",
+        description="Whether the answer references source evidence.",
     )
     faithfulness: bool = Field(
         default=True,
-        description="Whether the answer is faithful to the evidence.",
+        description=(
+            "PROXY: whether the answer appears document-grounded. "
+            "Healthcare: confidence >= 0.5. "
+            "Scientific: is_from_docs flag. "
+            "Not true NLI-based faithfulness."
+        ),
     )
     confidence_pass: bool = Field(
         default=True,
-        description="Whether the confidence score passes the threshold.",
+        description="Whether the confidence score passes the domain threshold.",
     )
 
 

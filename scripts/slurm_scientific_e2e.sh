@@ -532,11 +532,17 @@ sources = d.get('sources', [])
 if len(sources) == 0:
     errors.append('no sources returned')
 
-# 4. retrieval_metadata — must have scores
+# 4. retrieval_metadata — must have scores with real values
 rm = d.get('retrieval_metadata', {})
 scores = rm.get('scores', {})
 if 'fused' not in scores:
     errors.append('missing fused score')
+elif scores.get('fused', 0) <= 0:
+    errors.append(f'fused score is zero/negative: {scores.get(\"fused\")}')
+if scores.get('colpali', 0) <= 0:
+    errors.append(f'colpali score not propagated: {scores.get(\"colpali\", 0)}')
+if scores.get('scincl', 0) <= 0:
+    errors.append(f'scincl score not propagated: {scores.get(\"scincl\", 0)}')
 
 # 5. verification — must have all 3 fields
 v = d.get('verification', {})
@@ -562,10 +568,12 @@ else:
     # Build summary
     n_src = len(sources)
     fused = scores.get('fused', 0)
+    colpali = scores.get('colpali', 0)
+    scincl = scores.get('scincl', 0)
     titles = [s['title'][:40] for s in sources[:2]]
     attr = v.get('attribution', '?')
     faith = v.get('faithfulness', '?')
-    print(f'PASS|conf={conf:.4f} fused={fused:.4f} sources={n_src} latency={latency}ms attr={attr} faith={faith} papers={titles}')
+    print(f'PASS|conf={conf:.4f} fused={fused:.4f} colpali={colpali:.4f} scincl={scincl:.4f} sources={n_src} latency={latency}ms attr={attr} faith={faith} papers={titles}')
 " 2>&1)
 
     RESULT_STATUS=$(echo "${VALIDATION}" | cut -d'|' -f1)

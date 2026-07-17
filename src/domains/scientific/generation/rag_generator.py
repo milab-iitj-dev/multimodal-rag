@@ -36,6 +36,8 @@ class RAGGenerator:
                 "arxiv_id": doc_id,
                 "page_num": page_num,
                 "fused_score": round(fused_score, 4),
+                "colpali_norm_score": page.get("colpali_norm_score", 0.0),
+                "scincl_norm_score": page.get("scincl_norm_score", 0.0),
                 "arxiv_url": f"https://arxiv.org/abs/{doc_id}",
                 "text_snippet": text[:200]
             })

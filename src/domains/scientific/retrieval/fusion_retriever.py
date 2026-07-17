@@ -45,11 +45,15 @@ class FusionRetriever:
         else:
             s_min, s_max, s_range = 0, 0, 1e-8
 
-        # 3. Fuse scores
+        # 3. Fuse scores — also track individual normalized components per page
         fused = {}
+        colpali_norm = {}   # page_key → normalized colpali score
+        scincl_norm = {}    # page_key → normalized scincl score
+
         for pk, sc in c_scores.items():
             norm_c = (sc - c_min) / c_range
             fused[pk] = colpali_weight * norm_c
+            colpali_norm[pk] = round(norm_c, 4)
 
         for pk, sc in s_scores.items():
             norm_s = (sc - s_min) / s_range
@@ -57,11 +61,12 @@ class FusionRetriever:
                 fused[pk] += scincl_weight * norm_s
             else:
                 fused[pk] = scincl_weight * norm_s
+            scincl_norm[pk] = round(norm_s, 4)
 
         # 4. Sort and select top k
         fused_sorted = sorted(fused.items(), key=lambda x: x[1], reverse=True)[:top_k]
 
-        # 5. Build unified output objects
+        # 5. Build unified output objects with component scores preserved
         all_results = {r["page_key"]: r for r in colpali_results}
         all_results.update({r["page_key"]: r for r in scincl_results})
 
@@ -71,6 +76,9 @@ class FusionRetriever:
             # Make sure we copy to prevent altering original
             r_copy = dict(r)
             r_copy["fused_score"] = fused_score
+            # Preserve individual normalized component scores (0.0–1.0)
+            r_copy["colpali_norm_score"] = colpali_norm.get(page_key, 0.0)
+            r_copy["scincl_norm_score"] = scincl_norm.get(page_key, 0.0)
             final.append(r_copy)
             logger.info("Fused Rank [%d]: Page %s (Fused Score: %.4f)", i+1, page_key, fused_score)
 

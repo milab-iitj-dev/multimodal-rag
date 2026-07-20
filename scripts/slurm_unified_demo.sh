@@ -362,6 +362,22 @@ run_query() {
     local SUBDIR="$5"          # healthcare / scientific / auto
     local EXPECTED_METHOD="$6" # fused / colpali_only / scincl_only / any
 
+    # ── Image path diagnostics ──
+    if [ -n "${IMAGE_PATH}" ]; then
+        local ABS_IMG
+        if [[ "${IMAGE_PATH}" = /* ]]; then
+            ABS_IMG="${IMAGE_PATH}"
+        else
+            ABS_IMG="$(pwd)/${IMAGE_PATH}"
+        fi
+        if [ -f "${ABS_IMG}" ]; then
+            echo "  [${QID}] image: ${IMAGE_PATH} → EXISTS"
+        else
+            echo "  [${QID}] ✗ image NOT FOUND: ${ABS_IMG}"
+            return 1
+        fi
+    fi
+
     local PAYLOAD
     if [ -n "${IMAGE_PATH}" ]; then
         PAYLOAD="{\"query\":\"${QUERY_TEXT}\",\"domain\":\"${DOMAIN}\",\"top_k\":3,\"include_images\":true,\"image_path\":\"${IMAGE_PATH}\"}"
@@ -369,15 +385,17 @@ run_query() {
         PAYLOAD="{\"query\":\"${QUERY_TEXT}\",\"domain\":\"${DOMAIN}\",\"top_k\":3,\"include_images\":true}"
     fi
 
-    local HTTP_CODE
+    local HTTP_CODE RESPONSE_BODY
     HTTP_CODE=$(curl -s -o "${TMPFILE}" -w "%{http_code}" \
         -X POST "${BASE}/query" \
         -H "Content-Type: application/json" \
         -d "${PAYLOAD}" \
+        --max-time 180 \
         2>/dev/null)
 
     if [ "${HTTP_CODE}" != "200" ]; then
-        echo "  [${QID}] ✗ HTTP ${HTTP_CODE}"
+        RESPONSE_BODY=$(cat "${TMPFILE}" 2>/dev/null | head -c 200)
+        echo "  [${QID}] ✗ HTTP ${HTTP_CODE}: ${RESPONSE_BODY}"
         return 1
     fi
 
@@ -460,13 +478,23 @@ else:
 }
 
 # ── Discover images for Healthcare image/hybrid queries ──
+# Try the symlinked path first, then the absolute HC data path as fallback
 IMAGES=()
-if [ -d "data/openi/images" ]; then
+IMAGE_BASE="data/openi/images"
+if [ ! -d "${IMAGE_BASE}" ]; then
+    IMAGE_BASE="${HC_DATA_ROOT}/data/openi/images"
+fi
+
+if [ -d "${IMAGE_BASE}" ]; then
     while IFS= read -r img; do
         IMAGES+=("$img")
-    done < <(find data/openi/images -name "*.dcm.png" 2>/dev/null | sort | head -5)
+    done < <(find "${IMAGE_BASE}" -name "*.dcm.png" 2>/dev/null | sort | head -5)
 fi
+echo "  Image base directory: ${IMAGE_BASE}"
 echo "  Dataset images available: ${#IMAGES[@]}"
+if [ ${#IMAGES[@]} -gt 0 ]; then
+    echo "  Sample: ${IMAGES[0]}"
+fi
 echo ""
 
 # ════════════════════════════════════════
@@ -491,9 +519,15 @@ done
 echo ""
 
 # ════════════════════════════════════════
-# 4B — Healthcare Image-only (3 queries)
+# 4B — Healthcare Image + Text (3 queries)
 # ════════════════════════════════════════
-echo "  ── B. Healthcare Image-only ──"
+# NOTE: These queries include both an image AND text. Since HybridRetriever
+# detects has_image=True AND has_text=True, it selects "hybrid" mode
+# (dual-index retrieval + RRF fusion), NOT "image_only" mode.
+# Therefore the expected method is "fused" with all three scores > 0.
+# True image-only mode requires no text query, but the API requires
+# min_length=1 for the query field.
+echo "  ── B. Healthcare Image + Text ──"
 HC_IMAGE_QUERIES=(
     "hc_img_01|Retrieve visually similar chest X-rays."
     "hc_img_02|Find cases with similar lung patterns."
@@ -512,7 +546,7 @@ for i in "${!HC_IMAGE_QUERIES[@]}"; do
         HC_IMG_FAIL=$((HC_IMG_FAIL + 1))
         continue
     fi
-    if run_query "${QID}" "${QTEXT}" "healthcare" "${IMG_PATH}" "healthcare" "colpali_only"; then
+    if run_query "${QID}" "${QTEXT}" "healthcare" "${IMG_PATH}" "healthcare" "fused"; then
         HC_IMG_PASS=$((HC_IMG_PASS + 1))
     else
         HC_IMG_FAIL=$((HC_IMG_FAIL + 1))
@@ -820,7 +854,7 @@ Retrieval: Always runs both ColPali + SciNCL → weighted fusion.
 | Mode | method | colpali | scincl | fused |
 |------|--------|---------|--------|-------|
 | HC text-only | scincl_only | 0.0 | real | 0.0 |
-| HC image-only | colpali_only | real | 0.0 | 0.0 |
+| HC image+text | fused | real | real | real |
 | HC hybrid | fused | real | real | real |
 | Scientific | fused | real | real | real |
 
@@ -880,7 +914,7 @@ QueryResponse JSON           →  retrieval_metadata.scores.*
 | Mode | Passed | Failed | Total |
 |------|--------|--------|-------|
 | Text-only | ${HC_TEXT_PASS} | ${HC_TEXT_FAIL} | ${HC_TEXT_TOTAL} |
-| Image-only | ${HC_IMG_PASS} | ${HC_IMG_FAIL} | ${HC_IMG_TOTAL} |
+| Image+Text | ${HC_IMG_PASS} | ${HC_IMG_FAIL} | ${HC_IMG_TOTAL} |
 | Hybrid | ${HC_HYB_PASS} | ${HC_HYB_FAIL} | ${HC_HYB_TOTAL} |
 | **Total** | **${HC_PASS}** | **${HC_FAIL}** | **${HC_TOTAL}** |
 

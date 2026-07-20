@@ -54,11 +54,13 @@ queries:
       description: "Pleural effusion — tests multi-term text retrieval"
 
   # ════════════════════════════════════════════════════════════════════
-  # B. Healthcare — Image-only retrieval (3 queries)
+  # B. Healthcare — Image + Text retrieval (3 queries)
   # ════════════════════════════════════════════════════════════════════
-  # Uses real dataset images. Tests ColQwen2 image encoding →
-  # image index → visual similarity retrieval.
-  # Expected: method=colpali_only, image_score>0, text_score=0, fused=0
+  # These queries include BOTH an image_path AND a text query.
+  # Because HybridRetriever detects has_image=True AND has_text=True,
+  # it selects "hybrid" mode (dual-index retrieval + RRF fusion).
+  # This is the correct real-world behavior for image-guided queries.
+  # Expected: method=fused, image_score>0, text_score>0, fused>0
   image:
     - id: "hc_img_01"
       query: "Retrieve visually similar chest X-rays."

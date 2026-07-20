@@ -276,6 +276,23 @@ class OnlinePipeline:
             if r["fused_score"] > top_fused_score:
                 top_fused_score = r["fused_score"]
 
+        # ── Fallback: compute from raw retriever results ──
+        # When there is zero page overlap between ColPali top-10 and SciNCL
+        # top-10, ALL top-k fused pages come from one retriever only.
+        # In that case, compute the best normalized score from the raw
+        # results using the same min-max normalization as FusionRetriever.
+        if top_scincl_score == 0.0 and scincl_results:
+            s_scores = [r["score"] for r in scincl_results]
+            s_min, s_max = min(s_scores), max(s_scores)
+            s_range = s_max - s_min + 1e-8
+            top_scincl_score = round((s_max - s_min) / s_range, 4)
+
+        if top_colpali_score == 0.0 and colpali_results:
+            c_scores = [r["score"] for r in colpali_results]
+            c_min, c_max = min(c_scores), max(c_scores)
+            c_range = c_max - c_min + 1e-8
+            top_colpali_score = round((c_max - c_min) / c_range, 4)
+
         # Calculate blended final confidence
         is_from_docs = gen_result["is_from_docs"]
         final_conf = DomainGuard.calculate_blended_confidence(guard_conf, retrieval_conf, is_from_docs)

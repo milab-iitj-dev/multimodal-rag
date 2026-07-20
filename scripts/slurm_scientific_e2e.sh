@@ -182,7 +182,7 @@ if not a:
     print('FATAL: CUDA not available')
     exit(1)
 gn = torch.cuda.get_device_name(0)
-gm = torch.cuda.get_device_properties(0).total_mem / 1e9
+gm = torch.cuda.get_device_properties(0).total_memory / 1e9
 print(f'torch={v} cuda={cv} gpu={gn} vram={gm:.1f}GB')
 " 2>&1 | while IFS= read -r line; do echo "  ${line}"; done
 if [ ${PIPESTATUS[0]} -ne 0 ]; then fail "CUDA check failed"; exit 1; fi

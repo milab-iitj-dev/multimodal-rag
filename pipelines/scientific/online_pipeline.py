@@ -264,10 +264,16 @@ class OnlinePipeline:
             citation.scincl_norm_score = r.get("scincl_norm_score", 0.0)
             sources.append(citation)
 
-            # Track top-ranked scores (first source is highest-ranked)
-            if i == 0:
+            # Track best component scores across ALL returned sources.
+            # The top-fused page may only appear in one retriever's results
+            # (e.g., ColPali-only), giving it scincl_norm_score=0.0. Using
+            # the max across all sources correctly reflects each retriever's
+            # contribution to the fused ranking.
+            if citation.colpali_norm_score > top_colpali_score:
                 top_colpali_score = citation.colpali_norm_score
+            if citation.scincl_norm_score > top_scincl_score:
                 top_scincl_score = citation.scincl_norm_score
+            if r["fused_score"] > top_fused_score:
                 top_fused_score = r["fused_score"]
 
         # Calculate blended final confidence

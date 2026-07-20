@@ -960,9 +960,9 @@ QueryResponse JSON           →  retrieval_metadata.scores.*
 {"method": "scincl_only", "scores": {"colpali": 0.0, "scincl": "> 0", "fused": 0.0}}
 \`\`\`
 
-### Image-only (colpali_only)
+### Image+Text (fused)
 \`\`\`json
-{"method": "colpali_only", "scores": {"colpali": "> 0", "scincl": 0.0, "fused": 0.0}}
+{"method": "fused", "scores": {"colpali": "> 0", "scincl": "> 0", "fused": "> 0"}}
 \`\`\`
 
 ### Hybrid (fused)
@@ -1045,7 +1045,7 @@ echo "║  UNIFIED MMRAG — VALIDATION RESULTS                            ║"
 echo "╠══════════════════════════════════════════════════════════════════╣"
 echo "║                                                                 ║"
 echo "║  Healthcare Text:   ${HC_TEXT_PASS}/${HC_TEXT_TOTAL}                                          ║"
-echo "║  Healthcare Image:  ${HC_IMG_PASS}/${HC_IMG_TOTAL}                                          ║"
+echo "║  Healthcare Img+Txt:${HC_IMG_PASS}/${HC_IMG_TOTAL}                                          ║"
 echo "║  Healthcare Hybrid: ${HC_HYB_PASS}/${HC_HYB_TOTAL}                                          ║"
 echo "║  Scientific:        ${SCI_PASS}/${SCI_TOTAL}                                         ║"
 echo "║  Auto Routing:      ${AUTO_PASS}/${AUTO_TOTAL}                                          ║"

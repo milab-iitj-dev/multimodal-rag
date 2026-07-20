@@ -482,6 +482,7 @@ else:
 IMAGES=()
 IMAGE_BASE="data/openi/images"
 if [ ! -d "${IMAGE_BASE}" ]; then
+    echo "  Symlink path '${IMAGE_BASE}' not found, trying absolute..."
     IMAGE_BASE="${HC_DATA_ROOT}/data/openi/images"
 fi
 
@@ -493,9 +494,94 @@ fi
 echo "  Image base directory: ${IMAGE_BASE}"
 echo "  Dataset images available: ${#IMAGES[@]}"
 if [ ${#IMAGES[@]} -gt 0 ]; then
-    echo "  Sample: ${IMAGES[0]}"
+    for idx in "${!IMAGES[@]}"; do
+        echo "    [${idx}] ${IMAGES[$idx]}"
+    done
 fi
 echo ""
+
+# ── Pre-flight image test ──
+# Send a single diagnostic query with an image to verify the API can load it.
+# This catches path resolution, symlink, and serialization issues early.
+if [ ${#IMAGES[@]} -gt 0 ]; then
+    echo "  ── Pre-flight Image Test ──"
+    PREFLIGHT_IMG="${IMAGES[0]}"
+    echo "  Testing image_path: ${PREFLIGHT_IMG}"
+
+    # Verify the file is readable from the script's perspective
+    if [ -f "${PREFLIGHT_IMG}" ]; then
+        PREFLIGHT_SIZE=$(stat --format=%s "${PREFLIGHT_IMG}" 2>/dev/null || stat -f%z "${PREFLIGHT_IMG}" 2>/dev/null || echo "?")
+        echo "  File exists: YES (${PREFLIGHT_SIZE} bytes)"
+    else
+        echo "  ✗ File exists: NO — image discovery returned non-existent path"
+        echo "  Trying absolute fallback..."
+        PREFLIGHT_IMG="${HC_DATA_ROOT}/data/openi/images/$(basename ${PREFLIGHT_IMG})"
+        if [ -f "${PREFLIGHT_IMG}" ]; then
+            echo "  ✓ Absolute fallback exists: ${PREFLIGHT_IMG}"
+            # Rebuild IMAGES with absolute paths
+            IMAGES=()
+            while IFS= read -r img; do
+                IMAGES+=("$img")
+            done < <(find "${HC_DATA_ROOT}/data/openi/images" -name "*.dcm.png" 2>/dev/null | sort | head -5)
+            echo "  Rebuilt IMAGES with ${#IMAGES[@]} absolute paths"
+        else
+            echo "  ✗ Absolute fallback also missing — aborting image tests"
+        fi
+    fi
+
+    # Actually test the API can load it
+    if [ ${#IMAGES[@]} -gt 0 ]; then
+        PREFLIGHT_IMG="${IMAGES[0]}"
+        PREFLIGHT_PAYLOAD="{\"query\":\"preflight image test\",\"domain\":\"healthcare\",\"top_k\":1,\"include_images\":true,\"image_path\":\"${PREFLIGHT_IMG}\"}"
+        echo "  Payload: ${PREFLIGHT_PAYLOAD}"
+        PREFLIGHT_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${BASE}/query" \
+            -H "Content-Type: application/json" \
+            -d "${PREFLIGHT_PAYLOAD}" \
+            --max-time 120 \
+            2>/dev/null)
+        if [ "${PREFLIGHT_CODE}" = "200" ]; then
+            echo "  ✓ Pre-flight image test PASSED (HTTP 200)"
+        else
+            PREFLIGHT_BODY=$(curl -s \
+                -X POST "${BASE}/query" \
+                -H "Content-Type: application/json" \
+                -d "${PREFLIGHT_PAYLOAD}" \
+                --max-time 120 \
+                2>/dev/null | head -c 300)
+            echo "  ✗ Pre-flight image test FAILED (HTTP ${PREFLIGHT_CODE})"
+            echo "  Response: ${PREFLIGHT_BODY}"
+            echo ""
+            echo "  Trying with absolute path instead..."
+            # Try converting to absolute path
+            ABS_PREFLIGHT=$(realpath "${PREFLIGHT_IMG}" 2>/dev/null || readlink -f "${PREFLIGHT_IMG}" 2>/dev/null || echo "${PREFLIGHT_IMG}")
+            PREFLIGHT_PAYLOAD="{\"query\":\"preflight image test\",\"domain\":\"healthcare\",\"top_k\":1,\"include_images\":true,\"image_path\":\"${ABS_PREFLIGHT}\"}"
+            PREFLIGHT_CODE2=$(curl -s -o /dev/null -w "%{http_code}" \
+                -X POST "${BASE}/query" \
+                -H "Content-Type: application/json" \
+                -d "${PREFLIGHT_PAYLOAD}" \
+                --max-time 120 \
+                2>/dev/null)
+            if [ "${PREFLIGHT_CODE2}" = "200" ]; then
+                echo "  ✓ Absolute path worked (HTTP 200) — rebuilding IMAGES..."
+                # Rebuild all image paths as absolute
+                NEW_IMAGES=()
+                for img in "${IMAGES[@]}"; do
+                    ABS_IMG=$(realpath "${img}" 2>/dev/null || readlink -f "${img}" 2>/dev/null || echo "${img}")
+                    NEW_IMAGES+=("${ABS_IMG}")
+                done
+                IMAGES=("${NEW_IMAGES[@]}")
+                echo "  IMAGES rebuilt with absolute paths:"
+                for idx in "${!IMAGES[@]}"; do
+                    echo "    [${idx}] ${IMAGES[$idx]}"
+                done
+            else
+                echo "  ✗ Absolute path also failed (HTTP ${PREFLIGHT_CODE2})"
+            fi
+        fi
+    fi
+    echo ""
+fi
 
 # ════════════════════════════════════════
 # 4A — Healthcare Text-only (3 queries)

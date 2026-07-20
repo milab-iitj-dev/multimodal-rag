@@ -408,28 +408,43 @@ async def run_query(request: QueryRequest):
 
     # Load image if path provided (for true multimodal retrieval)
     image = None
+    # ── Image path diagnostic logging ──
+    logger.info(
+        f"/query: image_path={request.image_path!r}, "
+        f"query='{request.query[:60]}', domain={request.domain}"
+    )
     if request.image_path:
         import os
         from src.shared.image_utils import load_image
         resolved = request.image_path
         if not os.path.isabs(resolved):
             resolved = os.path.join(os.getcwd(), resolved)
+        logger.info(f"/query: resolved image path: {resolved}")
+        logger.info(f"/query: file exists: {os.path.exists(resolved)}")
+        if os.path.islink(resolved) or os.path.islink(os.path.dirname(resolved)):
+            real_path = os.path.realpath(resolved)
+            logger.info(f"/query: real path (symlink resolved): {real_path}")
+            logger.info(f"/query: real path exists: {os.path.exists(real_path)}")
         try:
             image = load_image(resolved)
             logger.info(
-                f"/query: loaded image from {resolved} "
+                f"/query: ✓ loaded image from {resolved} "
                 f"(size={image.size}, mode={image.mode})"
             )
         except FileNotFoundError:
+            logger.error(f"/query: ✗ FileNotFoundError: {resolved}")
             raise HTTPException(
                 status_code=400,
                 detail=f"Image not found: {resolved}",
             )
         except ValueError as e:
+            logger.error(f"/query: ✗ ValueError loading image: {e}")
             raise HTTPException(
                 status_code=400,
                 detail=f"Cannot open image: {e}",
             )
+    else:
+        logger.info("/query: no image_path provided → text-only mode")
 
     # Map domain: "auto" → None (triggers auto-detection in router)
     domain_hint = request.domain if request.domain != "auto" else None

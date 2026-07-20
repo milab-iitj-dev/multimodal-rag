@@ -313,30 +313,71 @@ class APIExampleGenerator:
     def discover_images(self) -> List[str]:
         """Find real dataset images from the configured directory.
 
+        Tries multiple path strategies:
+          1. Configured image_dir (relative to CWD)
+          2. Absolute path from CWD + image_dir
+          3. HC_DATA_ROOT fallback (HPC environment)
+
         Returns:
-            List of image paths (relative to project root).
+            List of image paths (absolute for reliability).
         """
+        print(f"  Image discovery:")
+        print(f"    Configured dir:  {self.image_dir}")
+        print(f"    Pattern:         {self.image_pattern}")
+        print(f"    CWD:             {os.getcwd()}")
+
+        # Strategy 1: Relative path glob
         pattern = os.path.join(self.image_dir, self.image_pattern)
         images = sorted(glob.glob(pattern))
+        print(f"    Relative glob:   {len(images)} matches ({pattern})")
 
         if not images:
-            # Try absolute path resolution
+            # Strategy 2: Absolute path from CWD
             abs_pattern = os.path.join(
                 os.getcwd(), self.image_dir, self.image_pattern
             )
             images = sorted(glob.glob(abs_pattern))
+            print(f"    Absolute glob:   {len(images)} matches ({abs_pattern})")
 
         if not images:
-            print(f"  ⚠ No images found matching {pattern}")
+            # Strategy 3: HPC fallback — try HC_DATA_ROOT environment variable
+            hc_root = os.environ.get("HC_DATA_ROOT", "")
+            if not hc_root:
+                # Try common HPC path
+                hc_root = "/scratch/data/divyasaxena_rs/Gokul_Faleja_internship/mmrag-healthcare"
+            hpc_pattern = os.path.join(
+                hc_root, "data", "openi", "images", self.image_pattern
+            )
+            images = sorted(glob.glob(hpc_pattern))
+            print(f"    HPC fallback:    {len(images)} matches ({hpc_pattern})")
+
+        if not images:
+            # Strategy 4: Follow symlinks
+            symlink_dir = os.path.join(os.getcwd(), self.image_dir)
+            if os.path.islink(symlink_dir) or os.path.islink(os.path.dirname(symlink_dir)):
+                real_dir = os.path.realpath(symlink_dir)
+                sym_pattern = os.path.join(real_dir, self.image_pattern)
+                images = sorted(glob.glob(sym_pattern))
+                print(f"    Symlink follow:  {len(images)} matches ({sym_pattern})")
+
+        if not images:
+            print(f"  ⚠ No images found after all strategies")
             return []
 
-        # Take up to max_images
+        # Take up to max_images, convert to absolute paths for reliability
         selected = images[: self.max_images]
-        print(f"  ✓ Found {len(images)} dataset images, using {len(selected)}")
+        abs_selected = []
         for img in selected:
-            print(f"    {os.path.basename(img)}")
+            abs_path = os.path.abspath(img) if not os.path.isabs(img) else img
+            abs_selected.append(abs_path)
 
-        return selected
+        print(f"  ✓ Found {len(images)} dataset images, using {len(abs_selected)}")
+        for i, img in enumerate(abs_selected):
+            exists = os.path.exists(img)
+            size = os.path.getsize(img) if exists else 0
+            print(f"    [{i}] {img} (exists={exists}, {size} bytes)")
+
+        return abs_selected
 
     # ── Query execution ───────────────────────────────────────
 
@@ -377,7 +418,11 @@ class APIExampleGenerator:
 
         print(f"  [{query_id}] {mode:6s} | {query[:60]}")
         if image_path:
-            print(f"           image: {os.path.basename(image_path)}")
+            exists = os.path.exists(image_path)
+            print(
+                f"           image: {image_path}\n"
+                f"           exists: {exists}"
+            )
 
         try:
             resp = requests.post(
@@ -386,7 +431,11 @@ class APIExampleGenerator:
                 timeout=self.timeout,
             )
             http_status = resp.status_code
-            response_data = resp.json() if http_status == 200 else None
+            if http_status == 200:
+                response_data = resp.json()
+            else:
+                print(f"           ✗ HTTP {http_status}: {resp.text[:200]}")
+                response_data = None
         except requests.Timeout:
             print(f"           ✗ TIMEOUT ({self.timeout}s)")
             http_status = 0

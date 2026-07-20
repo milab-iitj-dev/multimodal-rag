@@ -1,11 +1,14 @@
 # ════════════════════════════════════════════════════════════════════════
-# API Example Query Configuration
+# API Example Query Configuration — Production Validation Suite
 # ════════════════════════════════════════════════════════════════════════
 #
 # Used by: python tools/generate_api_examples.py
 #
-# Defines all example queries for generating production API artifacts.
-# Each query is run against the LIVE FastAPI server and validated.
+# 25 queries total:
+#   10 Healthcare (3 text + 3 image + 4 hybrid)
+#   10 Scientific (diverse papers/topics)
+#    5 Auto-routing (domain auto-detection)
+#
 # ════════════════════════════════════════════════════════════════════════
 
 server:
@@ -21,72 +24,102 @@ output:
 dataset:
   image_dir: "data/openi/images"
   image_pattern: "*.dcm.png"
-  max_images: 3
+  max_images: 5
 
 # ── Query definitions ──────────────────────────────────────────────────
 
 queries:
-  # ── A. Text-only retrieval ──
+  # ════════════════════════════════════════════════════════════════════
+  # A. Healthcare — Text-only retrieval (3 queries)
+  # ════════════════════════════════════════════════════════════════════
   # No image_path. Tests text embedding → ColQwen2 text index → retrieval.
+  # Expected: method=scincl_only, text_score>0, image_score=0, fused=0
   text:
-    - id: "text_01"
+    - id: "hc_text_01"
       query: "What is cardiomegaly?"
       domain: "healthcare"
       top_k: 3
       description: "Basic cardiology question — tests text-only retrieval path"
 
-    - id: "text_02"
-      query: "Explain pleural effusion."
+    - id: "hc_text_02"
+      query: "What is pneumothorax and how is it identified on chest X-ray?"
       domain: "healthcare"
       top_k: 3
-      description: "Common radiology finding — tests evidence aggregation"
+      description: "Pneumothorax identification — tests clinical text retrieval"
 
-    - id: "text_03"
-      query: "What are radiographic signs of pneumonia?"
+    - id: "hc_text_03"
+      query: "Explain pleural effusion and its radiographic findings."
       domain: "healthcare"
       top_k: 3
-      description: "Diagnostic imaging question — tests multi-term retrieval"
+      description: "Pleural effusion — tests multi-term text retrieval"
 
-  # ── B. Image retrieval ──
+  # ════════════════════════════════════════════════════════════════════
+  # B. Healthcare — Image-only retrieval (3 queries)
+  # ════════════════════════════════════════════════════════════════════
   # Uses real dataset images. Tests ColQwen2 image encoding →
   # image index → visual similarity retrieval.
+  # Expected: method=colpali_only, image_score>0, text_score=0, fused=0
   image:
-    - id: "image_01"
+    - id: "hc_img_01"
       query: "Retrieve visually similar chest X-rays."
       domain: "healthcare"
       top_k: 3
-      description: "Image-only visual similarity retrieval"
+      description: "Image-only visual similarity retrieval (image 1)"
       # image_path is auto-populated from dataset at runtime
 
-    - id: "image_02"
-      query: "Retrieve similar pulmonary nodule cases."
+    - id: "hc_img_02"
+      query: "Find cases with similar lung patterns."
       domain: "healthcare"
       top_k: 3
-      description: "Image-based retrieval for specific pathology"
+      description: "Image-only retrieval for lung patterns (image 2)"
 
-  # ── C. Hybrid retrieval (image + text) ──
+    - id: "hc_img_03"
+      query: "Retrieve similar pulmonary cases."
+      domain: "healthcare"
+      top_k: 3
+      description: "Image-only retrieval for pulmonary cases (image 3)"
+
+  # ════════════════════════════════════════════════════════════════════
+  # C. Healthcare — Hybrid retrieval (4 queries)
+  # ════════════════════════════════════════════════════════════════════
   # Uses real dataset images + text query. Tests dual-index retrieval:
   # ColQwen2 image encoding → image index
   # Text query → text index
   # → RRF fusion → question-aware reranking
   # → Qwen2-VL generation with query image + retrieved context
+  # Expected: method=fused, image_score>0, text_score>0, fused>0
   hybrid:
-    - id: "hybrid_01"
+    - id: "hc_hyb_01"
       query: "Does this chest X-ray show cardiomegaly?"
       domain: "healthcare"
       top_k: 3
       description: "Binary clinical question with image — tests full dual-index + RRF + VLM"
 
-    - id: "hybrid_02"
+    - id: "hc_hyb_02"
       query: "Is pleural effusion visible in this chest X-ray?"
       domain: "healthcare"
       top_k: 3
-      description: "Binary clinical question with image — tests image-aware generation"
+      description: "Effusion detection with image — tests image-aware generation"
 
-  # ── D. Scientific retrieval (text-only) ──
+    - id: "hc_hyb_03"
+      query: "Are there signs of pneumonia in this radiograph?"
+      domain: "healthcare"
+      top_k: 3
+      description: "Pneumonia signs with image — tests multi-finding retrieval"
+
+    - id: "hc_hyb_04"
+      query: "Is there a pulmonary nodule visible in this X-ray?"
+      domain: "healthcare"
+      top_k: 3
+      description: "Nodule detection with image — tests subtle finding retrieval"
+
+  # ════════════════════════════════════════════════════════════════════
+  # D. Scientific retrieval (10 queries)
+  # ════════════════════════════════════════════════════════════════════
   # Tests the Scientific pipeline: DomainGuard → ColPali + SciNCL →
   # weighted fusion → Qwen2-VL strict generation with paper context.
   # Corpus: 10 Vision Transformer research papers from arXiv.
+  # Expected: method=fused, colpali>0, scincl>0, fused>0
   scientific:
     - id: "sci_01"
       query: "What is the Vision Transformer (ViT) architecture and how does it process images?"
@@ -95,25 +128,96 @@ queries:
       description: "Core ViT architecture — tests retrieval from foundational ViT paper"
 
     - id: "sci_02"
-      query: "How does self-attention work in vision transformers?"
-      domain: "scientific"
-      top_k: 3
-      description: "Attention mechanism — tests cross-paper retrieval"
-
-    - id: "sci_03"
-      query: "What is the DeiT training strategy and how does knowledge distillation improve accuracy?"
+      query: "How does DeiT achieve competitive accuracy without large-scale pretraining datasets?"
       domain: "scientific"
       top_k: 3
       description: "DeiT distillation — tests specific paper retrieval and citation"
 
-    - id: "sci_04"
-      query: "How does Swin Transformer use shifted window attention?"
+    - id: "sci_03"
+      query: "What are the key differences between Swin Transformer and standard ViT?"
       domain: "scientific"
       top_k: 3
       description: "Swin Transformer — tests hierarchical architecture retrieval"
 
-    - id: "sci_05"
-      query: "What are the advantages of EfficientFormer over standard vision transformers?"
+    - id: "sci_04"
+      query: "How does EfficientFormer achieve MobileNet-level inference speed with transformer accuracy?"
       domain: "scientific"
       top_k: 3
       description: "EfficientFormer — tests efficiency vs accuracy trade-off retrieval"
+
+    - id: "sci_05"
+      query: "What scaling strategies are used in ViT-22B to train a 22 billion parameter vision model?"
+      domain: "scientific"
+      top_k: 3
+      description: "ViT-22B scaling — tests large-scale training retrieval"
+
+    - id: "sci_06"
+      query: "How does ConvNeXt modernize convolutional networks to compete with vision transformers?"
+      domain: "scientific"
+      top_k: 3
+      description: "ConvNeXt — tests CNN vs transformer comparison retrieval"
+
+    - id: "sci_07"
+      query: "What pooling strategies are used in vision transformers for global representation?"
+      domain: "scientific"
+      top_k: 3
+      description: "Pooling strategies — tests cross-paper retrieval on pooling methods"
+
+    - id: "sci_08"
+      query: "How does self-attention work in vision transformers compared to NLP transformers?"
+      domain: "scientific"
+      top_k: 3
+      description: "Attention mechanisms — tests cross-paper attention retrieval"
+
+    - id: "sci_09"
+      query: "What is patch embedding and how do different models handle image tokenization?"
+      domain: "scientific"
+      top_k: 3
+      description: "Patch embedding — tests image tokenization retrieval"
+
+    - id: "sci_10"
+      query: "What are the key findings on scaling laws for vision transformers?"
+      domain: "scientific"
+      top_k: 3
+      description: "Scaling laws — tests cross-paper scaling insights retrieval"
+
+  # ════════════════════════════════════════════════════════════════════
+  # E. Auto-routing queries (5 queries)
+  # ════════════════════════════════════════════════════════════════════
+  # domain: "auto" → DomainRouter decides based on keywords/bigrams.
+  # Tests the automatic domain detection system.
+  auto:
+    - id: "auto_01"
+      query: "What is cardiomegaly and how is it diagnosed?"
+      domain: "auto"
+      top_k: 3
+      description: "Clearly healthcare — tests auto-detection with medical keywords"
+      expected_domain: "healthcare"
+
+    - id: "auto_02"
+      query: "Explain pneumothorax findings on chest X-ray."
+      domain: "auto"
+      top_k: 3
+      description: "Clearly healthcare — tests auto-detection with radiology terms"
+      expected_domain: "healthcare"
+
+    - id: "auto_03"
+      query: "What is the Vision Transformer architecture?"
+      domain: "auto"
+      top_k: 3
+      description: "Clearly scientific — tests auto-detection with ML terms"
+      expected_domain: "scientific"
+
+    - id: "auto_04"
+      query: "How does knowledge distillation improve DeiT training?"
+      domain: "auto"
+      top_k: 3
+      description: "Clearly scientific — tests auto-detection with research terms"
+      expected_domain: "scientific"
+
+    - id: "auto_05"
+      query: "What medical imaging techniques use transformer architectures?"
+      domain: "auto"
+      top_k: 3
+      description: "Ambiguous query — tests router tie-breaking behavior"
+      expected_domain: "healthcare"

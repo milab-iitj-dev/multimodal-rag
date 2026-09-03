@@ -444,7 +444,33 @@ async def run_query(request: QueryRequest):
                 detail=f"Cannot open image: {e}",
             )
     else:
-        logger.info("/query: no image_path provided → text-only mode")
+        logger.info("/query: no image_path provided")
+
+    # ── Base64 image fallback (web frontend upload) ──
+    if image is None and request.image_b64:
+        import base64
+        import io
+        from PIL import Image as PILImage
+        logger.info(
+            f"/query: decoding image_b64 "
+            f"({len(request.image_b64)} chars)..."
+        )
+        try:
+            image_bytes = base64.b64decode(request.image_b64)
+            image = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+            logger.info(
+                f"/query: ✓ decoded base64 image "
+                f"(size={image.size}, mode={image.mode})"
+            )
+        except Exception as e:
+            logger.error(f"/query: ✗ invalid image_b64: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid base64 image data: {e}",
+            )
+
+    if image is None:
+        logger.info("/query: no image provided → text-only mode")
 
     # Map domain: "auto" → None (triggers auto-detection in router)
     domain_hint = request.domain if request.domain != "auto" else None

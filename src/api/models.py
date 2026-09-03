@@ -67,6 +67,15 @@ class QueryRequest(BaseModel):
         ),
         examples=["data/openi/images/1_IM-0001-4001.dcm.png"],
     )
+    image_b64: Optional[str] = Field(
+        default=None,
+        description=(
+            "Base64-encoded image data (JPEG/PNG). Alternative to image_path "
+            "for web clients that upload images via the browser. "
+            "If both image_path and image_b64 are provided, image_path "
+            "takes priority."
+        ),
+    )
 
 
 # ── Response components ─────────────────────────────────────

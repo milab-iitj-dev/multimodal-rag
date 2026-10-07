@@ -30,20 +30,20 @@ class FusionRetriever:
         c_vals = list(c_scores.values())
         if c_vals:
             c_min, c_max = min(c_vals), max(c_vals)
-            c_range = c_max - c_min + 1e-8
+            c_range = c_max - c_min
             logger.debug("ColPali score bounds: Min=%.4f, Max=%.4f (Weight=%.2f)", c_min, c_max, colpali_weight)
         else:
-            c_min, c_max, c_range = 0, 0, 1e-8
+            c_min, c_max, c_range = 0, 0, 0
 
         # 2. Normalize SciNCL scores
         s_scores = {r["page_key"]: r["score"] for r in scincl_results}
         s_vals = list(s_scores.values())
         if s_vals:
             s_min, s_max = min(s_vals), max(s_vals)
-            s_range = s_max - s_min + 1e-8
+            s_range = s_max - s_min
             logger.debug("SciNCL score bounds: Min=%.4f, Max=%.4f (Weight=%.2f)", s_min, s_max, scincl_weight)
         else:
-            s_min, s_max, s_range = 0, 0, 1e-8
+            s_min, s_max, s_range = 0, 0, 0
 
         # 3. Fuse scores — also track individual normalized components per page
         fused = {}
@@ -51,12 +51,12 @@ class FusionRetriever:
         scincl_norm = {}    # page_key → normalized scincl score
 
         for pk, sc in c_scores.items():
-            norm_c = (sc - c_min) / c_range
+            norm_c = (sc - c_min) / c_range if c_range > 1e-8 else (1.0 if c_max > 0 else 0.0)
             fused[pk] = colpali_weight * norm_c
             colpali_norm[pk] = round(norm_c, 4)
 
         for pk, sc in s_scores.items():
-            norm_s = (sc - s_min) / s_range
+            norm_s = (sc - s_min) / s_range if s_range > 1e-8 else (1.0 if s_max > 0 else 0.0)
             if pk in fused:
                 fused[pk] += scincl_weight * norm_s
             else:

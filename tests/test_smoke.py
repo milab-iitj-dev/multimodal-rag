@@ -72,13 +72,13 @@ def test_router_detection():
     router = DomainRouter()
 
     # Healthcare keywords
-    assert router.detect_domain("Is there pleural effusion in the chest x-ray?") == "healthcare"
+    assert router.detect_domain("Is there pleural effusion in the chest x-ray?")[0] == "healthcare"
     # Scientific keywords
-    assert router.detect_domain("What is the vision transformer architecture in the paper?") == "scientific"
+    assert router.detect_domain("What is the vision transformer architecture in the paper?")[0] == "scientific"
     # Default (no strong keywords)
-    assert router.detect_domain("Hello world") == "healthcare"
+    assert router.detect_domain("Hello world")[0] == "healthcare"
     # Explicit hint overrides
-    assert router.detect_domain("Hello", domain_hint="scientific") == "scientific"
+    assert router.detect_domain("Hello", domain_hint="scientific")[0] == "scientific"
     print("  [PASS] Domain detection (healthcare/scientific/default/explicit)")
 
 

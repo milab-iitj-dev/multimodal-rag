@@ -88,14 +88,7 @@ async function fetchWithTimeout(
 // ── API URL resolution ──────────────────────────────────────
 
 function getApiUrl(): string {
-  const url = import.meta.env.VITE_API_URL;
-  if (!url) {
-    throw new Error(
-      "VITE_API_URL is not configured. " +
-        "Create a .env.local file with: VITE_API_URL=http://localhost:8000/query"
-    );
-  }
-  return url;
+  return import.meta.env.VITE_API_URL || "http://localhost:8000/query";
 }
 
 // ── Main query function ─────────────────────────────────────

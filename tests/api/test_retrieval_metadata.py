@@ -520,6 +520,7 @@ class TestFusionRetrieverComponentScores:
 
     def test_fused_results_have_component_scores(self):
         pytest.importorskip("torch", reason="torch required for FusionRetriever import chain")
+        pytest.importorskip("chromadb", reason="chromadb required for retrieval package import chain")
         from src.domains.scientific.retrieval.fusion_retriever import FusionRetriever
 
         colpali_results = [
@@ -550,6 +551,7 @@ class TestFusionRetrieverComponentScores:
 
     def test_single_source_page_has_zero_for_missing_component(self):
         pytest.importorskip("torch", reason="torch required for FusionRetriever import chain")
+        pytest.importorskip("chromadb", reason="chromadb required for retrieval package import chain")
         from src.domains.scientific.retrieval.fusion_retriever import FusionRetriever
 
         colpali_results = [

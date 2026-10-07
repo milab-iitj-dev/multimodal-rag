@@ -133,3 +133,30 @@ export async function queryPipeline(
 
   return (await response.json()) as QueryResponse;
 }
+
+// ── Readiness Check ─────────────────────────────────────────
+
+export interface ReadyResponse {
+  ready: boolean;
+  domains: string[];
+  detail: string;
+}
+
+export async function checkReadiness(): Promise<ReadyResponse> {
+  const queryUrl = getApiUrl();
+  const readyUrl = queryUrl.replace(/\/query$/, "/ready");
+  try {
+    const res = await fetch(readyUrl);
+    if (!res.ok) {
+      return { ready: false, domains: [], detail: `Backend returned HTTP ${res.status}` };
+    }
+    return (await res.json()) as ReadyResponse;
+  } catch (err: any) {
+    return {
+      ready: false,
+      domains: [],
+      detail: `Cannot reach backend at ${readyUrl}`
+    };
+  }
+}
+

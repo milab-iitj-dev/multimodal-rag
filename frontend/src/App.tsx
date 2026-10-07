@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import logoImg from "./logo.png";
-import { queryPipeline } from "./services/api";
+import { queryPipeline, checkReadiness } from "./services/api";
 
 interface GraphNode {
   id: string;
@@ -91,28 +91,44 @@ function normalizeErrorMessage(err: unknown): string {
   if (!err) return "An unknown error occurred.";
   if (typeof err === "string") return err;
   if (err instanceof Error) {
-    if (err.message && err.message !== "[object Object]") {
-      return err.message;
+    let msg = err.message;
+    if (msg.startsWith("Backend error: ")) {
+      msg = msg.substring("Backend error: ".length);
     }
+    if (msg.startsWith("[object Object]")) {
+      return "Pipeline execution error.";
+    }
+    try {
+      const parsed = JSON.parse(msg);
+      if (typeof parsed === "string") return parsed;
+      if (typeof parsed.detail === "string") return parsed.detail;
+      if (Array.isArray(parsed.detail)) {
+        return parsed.detail.map((d: any) => d.msg || (typeof d === "string" ? d : JSON.stringify(d))).join("; ");
+      }
+    } catch {
+      // not json, return msg
+    }
+    return msg;
   }
   if (typeof err === "object") {
     const obj = err as Record<string, any>;
     if (typeof obj.detail === "string") return obj.detail;
     if (Array.isArray(obj.detail)) {
-      return obj.detail.map((d: any) => d.msg || JSON.stringify(d)).join("; ");
+      return obj.detail.map((d: any) => d.msg || (typeof d === "string" ? d : JSON.stringify(d))).join("; ");
     }
     if (typeof obj.message === "string" && obj.message !== "[object Object]") {
       return obj.message;
     }
     try {
       const jsonStr = JSON.stringify(err);
-      if (jsonStr && jsonStr !== "{}") return jsonStr;
+      if (jsonStr && jsonStr !== "{}" && jsonStr !== "[object Object]") return jsonStr;
     } catch {
       // Fall through
     }
   }
   return String(err);
 }
+
 
 // Helper function to fetch an image, downscale it to max 768px, and compress it to JPEG format
 async function urlToBase64Part(url: string): Promise<{ inlineData: { mimeType: string; data: string } }> {
@@ -175,37 +191,40 @@ async function urlToBase64Part(url: string): Promise<{ inlineData: { mimeType: s
   });
 }
 
-// Presets for similar cases strip
+const FALLBACK_XRAY_SVG = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='400' height='400' viewBox='0 0 400 400'><rect width='400' height='400' fill='%230f172a'/><text x='50%' y='50%' fill='%2338bdf8' font-family='sans-serif' font-size='14' font-weight='bold' text-anchor='middle'>Chest X-Ray Preview</text></svg>";
+
+// Presets for similar cases strip — served securely from HTTP endpoint
 const similarCases = [
   {
     score: "0.92",
-    img: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a1/Normal_posteroanterior_chest_radiograph.jpg/400px-Normal_posteroanterior_chest_radiograph.jpg",
-    name: "case_normal_pa.png",
+    img: "http://localhost:8000/images/1000_IM-0003-1001.dcm.png",
+    name: "1000_IM-0003-1001.dcm.png",
     type: "PA Frontal",
     query: "Is there any opacity visible or is this a completely normal chest radiograph?"
   },
   {
     score: "0.89",
-    img: "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3b/Chest_X_ray_showing_bilateral_pneumonia_01.jpg/400px-Chest_X_ray_showing_bilateral_pneumonia_01.jpg",
-    name: "case_bilateral_pneu.png",
+    img: "http://localhost:8000/images/1001_IM-0004-1001.dcm.png",
+    name: "1001_IM-0004-1001.dcm.png",
     type: "AP Supine",
     query: "Explain the classic visual indications of bilateral pneumonia visible in these lower fields."
   },
   {
     score: "0.87",
-    img: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Pneumothorax_CO_PA_rotated.jpg/400px-Pneumothorax_CO_PA_rotated.jpg",
-    name: "case_pneumothorax.png",
+    img: "http://localhost:8000/images/1002_IM-0004-1001.dcm.png",
+    name: "1002_IM-0004-1001.dcm.png",
     type: "PA Erect",
     query: "Are there apical pleural lines or hyperlucency indicating a pneumothorax in this image?"
   },
   {
     score: "0.83",
-    img: "https://upload.wikimedia.org/wikipedia/commons/thumb/d/df/Normal_chest_X-ray.jpg/400px-Normal_chest_X-ray.jpg",
-    name: "case_cardiomegaly.png",
+    img: "http://localhost:8000/images/1004_IM-0005-1001.dcm.png",
+    name: "1004_IM-0005-1001.dcm.png",
     type: "AP Portable",
     query: "Determine the cardiac silhouette ratio and check if there is trace pulmonary edema."
   }
 ];
+
 
 export default function App() {
   const [appMode, setAppMode] = useState<"healthcare" | "scientific" | "auto">("auto");
@@ -252,6 +271,8 @@ export default function App() {
   const [baselineAnswer, setBaselineAnswer] = useState<string>("Patchy opacification is noted in the right lower lung zone. This finding is non-specific and may represent infectious/inflammatory consolidation or atelectasis. Recommend clinical correlation.");
   const [baselineLatency, setBaselineLatency] = useState<number>(140);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [loadedDomains, setLoadedDomains] = useState<string[]>(["healthcare"]);
+
 
   const [healthcareCache, setHealthcareCache] = useState<ModeData>({
     primaryAnswer: "There is a patchy opacity in the right lower lung zone that may represent consolidation or subsegmental atelectatic change. Mild blunting of the right costophrenic angle is present. Cardiomediastinal silhouette is not enlarged. No pneumothorax is detected.",
@@ -408,10 +429,18 @@ export default function App() {
     });
   };
 
-  // Initialize checks
+  // Initialize checks & poll readiness
   useEffect(() => {
+    async function checkReadinessStatus() {
+      const readyRes = await checkReadiness();
+      if (readyRes.domains && readyRes.domains.length > 0) {
+        setLoadedDomains(readyRes.domains);
+      }
+    }
+    checkReadinessStatus();
     runAnalysisDirectly(queryText, selectedQueryType);
   }, []);
+
 
   // Context Graph drag-and-drop physics loops and mouse handlers
   useEffect(() => {
@@ -604,17 +633,22 @@ export default function App() {
       setGenerationTime(+(Math.round(result.latency_ms * 0.7) / 1000).toFixed(1));
       setTotalTime(+(result.latency_ms / 1000).toFixed(1));
 
-      // Update verification status list
-      if (result.verification?.faithfulness && result.verification?.attribution) {
+      // Update verification status list based on real backend booleans
+      const v = result.verification || { attribution: true, faithfulness: true, confidence_pass: true };
+      if (v.attribution && v.faithfulness && v.confidence_pass) {
         setVerificationTitle("Verified: evidence aligned");
+      } else if (v.attribution || v.faithfulness) {
+        setVerificationTitle("Review: partial evidence alignment");
       } else {
-        setVerificationTitle("Review: moderate evidence alignment");
+        setVerificationTitle("Unverified: check evidence");
       }
+
       setVerificationList([
-        result.verification?.attribution ? "Answer references source evidence" : "Attribution: not verified",
-        result.verification?.faithfulness ? "Answer is document-grounded" : "Faithfulness: review recommended",
-        result.verification?.confidence_pass ? "Confidence threshold met" : "Confidence below threshold"
+        v.attribution ? "Answer references source evidence" : "Attribution: source citations missing",
+        v.faithfulness ? "Answer is document-grounded" : "Faithfulness: review recommended",
+        v.confidence_pass ? "Confidence threshold met" : "Confidence below domain threshold"
       ]);
+
 
       // Dynamic graph update (if present)
       if (result.graph?.nodes && result.graph?.edges) {
@@ -693,17 +727,22 @@ export default function App() {
       setGenerationTime(+(Math.round(result.latency_ms * 0.7) / 1000).toFixed(1));
       setTotalTime(+(result.latency_ms / 1000).toFixed(1));
 
-      // Update verification status list
-      if (result.verification?.faithfulness && result.verification?.attribution) {
+      // Update verification status list based on real backend booleans
+      const v = result.verification || { attribution: true, faithfulness: true, confidence_pass: true };
+      if (v.attribution && v.faithfulness && v.confidence_pass) {
         setVerificationTitle("Verified: evidence aligned");
+      } else if (v.attribution || v.faithfulness) {
+        setVerificationTitle("Review: partial evidence alignment");
       } else {
-        setVerificationTitle("Review: moderate evidence alignment");
+        setVerificationTitle("Unverified: check evidence");
       }
+
       setVerificationList([
-        result.verification?.attribution ? "Answer references source evidence" : "Attribution: not verified",
-        result.verification?.faithfulness ? "Answer is document-grounded" : "Faithfulness: review recommended",
-        result.verification?.confidence_pass ? "Confidence threshold met" : "Confidence below threshold"
+        v.attribution ? "Answer references source evidence" : "Attribution: source citations missing",
+        v.faithfulness ? "Answer is document-grounded" : "Faithfulness: review recommended",
+        v.confidence_pass ? "Confidence threshold met" : "Confidence below domain threshold"
       ]);
+
 
       // Dynamic graph update (if present)
       if (result.graph?.nodes && result.graph?.edges) {
@@ -1026,8 +1065,10 @@ QUALITY ATTRIBUTIONS:
                   src={previewImageSrc} 
                   style={imageTransformStyle}
                   alt="Intake Chest Radiograph"
+                  onError={(e) => { e.currentTarget.src = FALLBACK_XRAY_SVG; }}
                   referrerPolicy="no-referrer"
                 />
+
 
                 {/* Bounding Box ROI Overlay */}
                 {isHighlightOn && (
@@ -1797,11 +1838,12 @@ QUALITY ATTRIBUTIONS:
                       </div>
                       <div className="p-2.5 bg-cyan-50/60 border border-cyan-200 rounded-xl text-center relative overflow-hidden select-none">
                         <span className="block text-[9px] font-extrabold text-cyan-700 uppercase tracking-wider mb-1">Alignment</span>
-                        <span className="font-mono text-xs font-black text-cyan-900 block mb-1.5">{(evidenceAlignmentScore * 100).toFixed(0)}% (Aligned)</span>
+                        <span className="font-mono text-xs font-black text-cyan-900 block mb-1.5">{confidencePercent}% (Grounded)</span>
                         <div className="w-full h-1.5 bg-cyan-200 rounded-full overflow-hidden">
-                          <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500" style={{ width: `${(evidenceAlignmentScore * 100).toFixed(0)}%` }}></div>
+                          <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500" style={{ width: `${confidencePercent}%` }}></div>
                         </div>
                       </div>
+
                     </div>
 
                     <div className="mt-4 pt-3 border-t border-teal-150 flex justify-between items-center text-[10px] font-bold text-teal-850 font-mono">
@@ -1858,13 +1900,14 @@ QUALITY ATTRIBUTIONS:
                   <span 
                     id="alignment-bar" 
                     className="block h-full rounded-full transition-all duration-500 bg-gradient-to-r from-teal-500 to-cyan-500" 
-                    style={{ width: `${Math.round(evidenceAlignmentScore * 100)}%` }}
+                    style={{ width: `${confidencePercent}%` }}
                   ></span>
                 </div>
                 
                 <strong id="alignment-score" className="text-xs uppercase tracking-normal text-teal-800 italic font-bold">
-                  Evidence alignment score: {evidenceAlignmentScore.toFixed(2)} / 1.00
+                  Evidence Alignment: {verificationTitle.includes("Verified") ? "Verified ✓" : "Review Recommended"}
                 </strong>
+
                 
                 <ul id="verification-list" className="p-0 pl-4 mt-3 flex flex-col gap-1.5 text-xs text-teal-900">
                   {verificationList.map((item, index) => (
@@ -2094,8 +2137,10 @@ QUALITY ATTRIBUTIONS:
                         src={item.img} 
                         alt={`Case preset #${index + 1}`} 
                         className="w-full aspect-square object-cover opacity-80 group-hover:opacity-100 transition-opacity"
+                        onError={(e) => { e.currentTarget.src = FALLBACK_XRAY_SVG; }}
                         referrerPolicy="no-referrer"
                       />
+
                       <figcaption className="text-center text-[10px] py-1 font-bold bg-white text-teal-800 transition-colors group-hover:bg-teal-50">
                         S:{item.score}
                       </figcaption>

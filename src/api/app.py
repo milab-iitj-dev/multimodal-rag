@@ -25,6 +25,7 @@ from typing import Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.models import (
@@ -325,6 +326,33 @@ def _map_verification(unified_response) -> VerificationResult:
 async def health_check():
     """Health check — always returns 200 if the service is running."""
     return HealthResponse()
+
+
+@app.get(
+    "/images/{filename:path}",
+    tags=["Assets"],
+    summary="Serve OpenI image assets securely",
+)
+async def serve_image(filename: str):
+    """Serve an image from data/openi/images securely with path containment check."""
+    import os
+    base_dir = os.path.abspath("data/openi/images")
+    if not os.path.exists(base_dir):
+        # Fall back to resolving relative to project root
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        base_dir = os.path.abspath(os.path.join(project_root, "data", "openi", "images"))
+
+    clean_filename = os.path.basename(filename)
+    target_path = os.path.abspath(os.path.join(base_dir, clean_filename))
+
+    # Path traversal check: target_path must be inside base_dir
+    if not target_path.startswith(base_dir):
+        raise HTTPException(status_code=400, detail="Invalid image path traversal attempt")
+
+    if not os.path.exists(target_path) or not os.path.isfile(target_path):
+        raise HTTPException(status_code=404, detail=f"Image {clean_filename} not found")
+
+    return FileResponse(target_path)
 
 
 @app.get(

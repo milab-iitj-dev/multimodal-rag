@@ -87,7 +87,33 @@ const initialEdges: GraphEdge[] = [
   { source: "N4", target: "N6", relation: "identifies" },
 ];
 
-// Helper function to fetch an image and convert it to Gemini API's Part structure
+function normalizeErrorMessage(err: unknown): string {
+  if (!err) return "An unknown error occurred.";
+  if (typeof err === "string") return err;
+  if (err instanceof Error) {
+    if (err.message && err.message !== "[object Object]") {
+      return err.message;
+    }
+  }
+  if (typeof err === "object") {
+    const obj = err as Record<string, any>;
+    if (typeof obj.detail === "string") return obj.detail;
+    if (Array.isArray(obj.detail)) {
+      return obj.detail.map((d: any) => d.msg || JSON.stringify(d)).join("; ");
+    }
+    if (typeof obj.message === "string" && obj.message !== "[object Object]") {
+      return obj.message;
+    }
+    try {
+      const jsonStr = JSON.stringify(err);
+      if (jsonStr && jsonStr !== "{}") return jsonStr;
+    } catch {
+      // Fall through
+    }
+  }
+  return String(err);
+}
+
 // Helper function to fetch an image, downscale it to max 768px, and compress it to JPEG format
 async function urlToBase64Part(url: string): Promise<{ inlineData: { mimeType: string; data: string } }> {
   return new Promise(async (resolve, reject) => {
@@ -608,7 +634,7 @@ export default function App() {
       }
     } catch (err: any) {
       console.error("runAnalysisDirectly error:", err);
-      setErrorMessage(err.message || String(err));
+      setErrorMessage(normalizeErrorMessage(err));
     }
   };
 
@@ -698,8 +724,9 @@ export default function App() {
 
     } catch (err: any) {
       console.error("Pipeline Error:", err);
-      setErrorMessage(err.message || String(err));
-      setPrimaryAnswer(`Error running pipeline: ${err.message || err}.`);
+      const formattedErr = normalizeErrorMessage(err);
+      setErrorMessage(formattedErr);
+      setPrimaryAnswer(`Error running pipeline: ${formattedErr}`);
       setBaselineAnswer("");
       setBaselineLatency(0);
       setClinicalNote("");
@@ -917,7 +944,7 @@ QUALITY ATTRIBUTIONS:
 
         <div className="status-row" aria-label="System status">
           <span className="status-pill online"><i></i>RAGVQA Ready</span>
-          <span className="status-pill gpu"><i></i>Qwen2-VL / A100</span>
+          <span className="status-pill gpu"><i></i>Qwen2-VL / Multimodal Engine</span>
           
           {/* Drawer Toggle Button */}
           <button 
@@ -1342,18 +1369,6 @@ QUALITY ATTRIBUTIONS:
             </div>
             <span className="text-xs font-bold text-emerald-700 uppercase tracking-wider">VLM Engine</span>
           </div>
-
-          {!isApiKeyConfigured && (
-            <div className="mb-4 p-3 bg-red-50 text-red-800 border border-red-200 rounded-xl text-xs font-semibold flex items-start gap-2">
-              <AlertTriangle className="text-red-600 shrink-0 mt-0.5" size={14} />
-              <div>
-                <strong className="block text-red-900 font-bold mb-0.5">Gemini API Key Missing</strong>
-                <span className="text-[10px] leading-normal text-red-700/90 font-medium">
-                  Set <code>GEMINI_API_KEY</code> in <code>.env.local</code> and restart the server to use live AI analysis. Currently running in demo/fallback mode.
-                </span>
-              </div>
-            </div>
-          )}
 
           {/* Query Classifications Tabs */}
           <div className="query-types-container">

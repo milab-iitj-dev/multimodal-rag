@@ -174,14 +174,16 @@ class DomainRouter:
         self,
         query: str = "",
         domain_hint: Optional[str] = None,
+        image: Optional[Image.Image] = None,
     ) -> Tuple[str, float]:
         """
         Detect the appropriate domain for a query.
 
         Priority:
           1. Explicit domain_hint (if valid and not "auto")
-          2. Keyword + bigram auto-detection
-          3. Config default
+          2. Image presence check (if image provided and no strong sci keywords → healthcare)
+          3. Keyword + bigram auto-detection
+          4. Config default
 
         Returns:
             Tuple of (domain_name, routing_confidence).
@@ -192,7 +194,15 @@ class DomainRouter:
             logger.info(f"Domain: {domain_hint} (explicit)")
             return domain_hint.lower(), 1.0
 
-        # Priority 2: Keyword + bigram detection
+        # Priority 2: Image presence signal (clinical radiography image)
+        if image is not None:
+            detected, confidence = self._detect_by_keywords(query)
+            if detected == "scientific" and confidence > 0.5:
+                return "scientific", confidence
+            logger.info("Domain: healthcare (image uploaded, clinical radiography signal)")
+            return "healthcare", 0.9
+
+        # Priority 3: Keyword + bigram detection
         if query:
             detected, confidence = self._detect_by_keywords(query)
             if detected:
@@ -202,7 +212,7 @@ class DomainRouter:
                 )
                 return detected, confidence
 
-        # Priority 3: Config default
+        # Priority 4: Config default
         logger.info(f"Domain: {self.default_domain} (default)")
         return self.default_domain, 0.0
 
@@ -230,8 +240,23 @@ class DomainRouter:
         Returns:
             UnifiedResponse from the appropriate pipeline.
         """
-        domain, routing_confidence = self.detect_domain(query, domain_hint)
+        domain, routing_confidence = self.detect_domain(query, domain_hint, image=image)
         pipeline = self.get_pipeline(domain)
+
+        # In AUTO mode: do not route to an unloaded pipeline if a live pipeline is available
+        if (domain_hint is None or domain_hint == "auto"):
+            inner = getattr(pipeline, 'inner', None)
+            if inner is None:
+                for alt_name, alt_pipe in self._pipelines.items():
+                    if alt_name != domain and getattr(alt_pipe, 'inner', None) is not None:
+                        logger.info(
+                            f"AUTO route: '{domain}' is in placeholder mode. "
+                            f"Routing to live pipeline '{alt_name}'."
+                        )
+                        domain = alt_name
+                        pipeline = alt_pipe
+                        break
+
         result = pipeline.run(query=query, image=image, top_k=top_k, **kwargs)
 
         # Inject routing metadata into the response
